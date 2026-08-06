@@ -1,0 +1,64 @@
+{"text": "I owe money to five different lenders and I can't keep up. Can you explain that in plain English? I'm a bit lost.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 1}}
+{"text": "My hours were cut and my income has basically halved. I've got no savings at all, one unexpected bill would finish me.", "labels": {"health": 0, "life_events": 1, "resilience": 1, "capability": 0}}
+{"text": "What time do your branches close on a Saturday?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "If you take that payment I won't have money for food this week.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "I'm borrowing on one card to pay another, it's a mess. I'd like my son to be able to speak to you about my account.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 1}}
+{"text": "I'm borrowing on one card to pay another, it's a mess. English isn't my first language so please speak slowly.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 1}}
+{"text": "I've had to stop working to care for my disabled son full time.", "labels": {"health": 0, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "My partner and I have separated so I've moved out.", "labels": {"health": 0, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I'd like to book an appointment with a mortgage adviser. Can you tell me what my interest rate is?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I'm registered disabled and it's hard for me to get to a branch. My daughter usually helps me with this sort of thing.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I genuinely can't afford this payment, I'm choosing between heating and eating.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "I'm borrowing on one card to pay another, it's a mess.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "I'd like to order a new debit card please. I think there's a duplicate charge on my statement.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I have depression and some days I can't even open the post.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I have depression and some days I can't even open the post. I'm not good with computers, can I do this over the phone instead?", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "There's nothing left after the bills, I'm living hand to mouth.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "I lost my job on Friday and I don't know how I'll manage.", "labels": {"health": 0, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I think there's a duplicate charge on my statement.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "My partner and I have separated so I've moved out. I genuinely can't afford this payment, I'm choosing between heating and eating.", "labels": {"health": 0, "life_events": 1, "resilience": 1, "capability": 0}}
+{"text": "I've fallen behind on everything and the debts are piling up. I don't really understand all these financial terms, sorry.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 1}}
+{"text": "We're going through a divorce and need to split the joint account. I'm registered disabled and it's hard for me to get to a branch.", "labels": {"health": 1, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I've just been diagnosed with cancer and I'm starting chemo next week.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I want to set up a standing order to my landlord. Can I increase my overdraft limit?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I'm really struggling financially, I don't know where to turn.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "I'm calling to update my address, I've moved. Hi, I'd like to check the balance on my current account.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I want to set up a standing order to my landlord. How do I set up the mobile app?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "Can I increase my overdraft limit?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "My anxiety has been really bad lately, I'm honestly not coping.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I'm in and out of hospital at the moment with my heart condition.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I'm really struggling financially, I don't know where to turn. I've got power of attorney for my father, I'm calling on his behalf.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 1}}
+{"text": "I find all the online stuff really confusing.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I don't really understand all these financial terms, sorry.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "Can you confirm my last three transactions?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "English isn't my first language so please speak slowly.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I lost my job on Friday and I don't know how I'll manage. I owe money to five different lenders and I can't keep up.", "labels": {"health": 0, "life_events": 1, "resilience": 1, "capability": 0}}
+{"text": "My daughter usually helps me with this sort of thing.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I lost my job on Friday and I don't know how I'll manage. I've got a terminal illness so I'm trying to sort my affairs out.", "labels": {"health": 1, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I've fallen behind on everything and the debts are piling up.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "My hours were cut and my income has basically halved. I genuinely can't afford this payment, I'm choosing between heating and eating.", "labels": {"health": 0, "life_events": 1, "resilience": 1, "capability": 0}}
+{"text": "I think there's a duplicate charge on my statement. I'm calling to update my address, I've moved.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I've got power of attorney for my father, I'm calling on his behalf.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I'm calling to update my address, I've moved.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I struggle with my memory since the stroke, I forget things.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "There's nothing left after the bills, I'm living hand to mouth. I'd like my son to be able to speak to you about my account.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 1}}
+{"text": "I've had to stop working to care for my disabled son full time. I have depression and some days I can't even open the post.", "labels": {"health": 1, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I'm not good with computers, can I do this over the phone instead?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I was made redundant and the redundancy pay has run out.", "labels": {"health": 0, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I've had to stop working to care for my disabled son full time. My anxiety has been really bad lately, I'm honestly not coping.", "labels": {"health": 1, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "What's the exchange rate for euros today? What time do your branches close on a Saturday?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I've got no savings at all, one unexpected bill would finish me.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "Can you tell me what my interest rate is? Can you tell me what my interest rate is?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "My hours were cut and my income has basically halved.", "labels": {"health": 0, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "I've got a terminal illness so I'm trying to sort my affairs out.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I'd like my son to be able to speak to you about my account.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "What's the exchange rate for euros today?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I'd like to book an appointment with a mortgage adviser.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "We're going through a divorce and need to split the joint account.", "labels": {"health": 0, "life_events": 1, "resilience": 0, "capability": 0}}
+{"text": "Can you tell me what my interest rate is? Can you confirm my last three transactions?", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "Can you explain that in plain English? I'm a bit lost.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "I'm registered disabled and it's hard for me to get to a branch.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "I owe money to five different lenders and I can't keep up.", "labels": {"health": 0, "life_events": 0, "resilience": 1, "capability": 0}}
+{"text": "I've just been diagnosed with cancer and I'm starting chemo next week. I find all the online stuff really confusing.", "labels": {"health": 1, "life_events": 0, "resilience": 0, "capability": 1}}
+{"text": "Hi, I'd like to check the balance on my current account.", "labels": {"health": 0, "life_events": 0, "resilience": 0, "capability": 0}}
+{"text": "My hours were cut and my income has basically halved. I'm registered disabled and it's hard for me to get to a branch.", "labels": {"health": 1, "life_events": 1, "resilience": 0, "capability": 0}}

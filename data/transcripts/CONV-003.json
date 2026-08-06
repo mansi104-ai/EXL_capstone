@@ -1,0 +1,22 @@
+{
+  "conversation_id": "CONV-003",
+  "description": "Neutral (no vulnerability)",
+  "turns": [
+    {
+      "speaker": "handler",
+      "text": "Thanks for calling Acme, how can I help you today?"
+    },
+    {
+      "speaker": "customer",
+      "text": "Hi, I'd like to check the balance on my current account."
+    },
+    {
+      "speaker": "handler",
+      "text": "Of course, let me confirm a couple of security details."
+    },
+    {
+      "speaker": "customer",
+      "text": "Sure. Also can I order a new debit card please?"
+    }
+  ]
+}

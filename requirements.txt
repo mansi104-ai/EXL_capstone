@@ -1,0 +1,29 @@
+# Core
+pydantic>=2.6
+pyyaml>=6.0
+python-dotenv>=1.0
+
+# Classifier (fine-tuned transformer)
+torch>=2.2
+transformers>=4.40
+datasets>=2.19
+scikit-learn>=1.4
+accelerate>=0.30
+
+# RAG over policy
+sentence-transformers>=2.7
+faiss-cpu>=1.8
+numpy>=1.26
+
+# Transcription
+azure-cognitiveservices-speech>=1.37   # real-time (optional at runtime)
+
+# UI / API
+streamlit>=1.34
+fastapi>=0.110
+uvicorn>=0.29
+pandas>=2.2
+plotly>=5.20
+
+# Tooling / tests
+pytest>=8.1

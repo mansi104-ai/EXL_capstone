@@ -1,0 +1,30 @@
+{
+  "conversation_id": "CONV-001",
+  "description": "Bereavement + financial distress",
+  "turns": [
+    {
+      "speaker": "handler",
+      "text": "Thanks for calling Acme, how can I help today?"
+    },
+    {
+      "speaker": "customer",
+      "text": "My husband passed away last month and I'm dealing with his accounts."
+    },
+    {
+      "speaker": "handler",
+      "text": "I'm so sorry for your loss. Let me help you with that."
+    },
+    {
+      "speaker": "customer",
+      "text": "Thank you. The thing is, money is really tight now, I genuinely can't afford the loan payment this month."
+    },
+    {
+      "speaker": "handler",
+      "text": "I understand. Let me look at what we can do."
+    },
+    {
+      "speaker": "customer",
+      "text": "I've got no savings at all, one unexpected bill would finish me."
+    }
+  ]
+}
