@@ -1,29 +1,25 @@
+# Lightweight dependency set for Streamlit Community Cloud (~1 GB memory limit).
+# The app runs fully on this set via its built-in fallbacks: the keyword
+# classifier stands in for the fine-tuned DistilBERT model, and the TF-IDF
+# retriever stands in for semantic RAG. No torch / transformers / faiss / azure.
+#
+# For the full local experience (fine-tuned transformer, semantic RAG, Azure
+# Speech), install requirements-full.txt instead.
+
 # Core
 pydantic>=2.6
 pyyaml>=6.0
 python-dotenv>=1.0
 
-# Classifier (fine-tuned transformer)
-torch>=2.2
-transformers>=4.40
-datasets>=2.19
-scikit-learn>=1.4
-accelerate>=0.30
-
-# RAG over policy
-sentence-transformers>=2.7
-faiss-cpu>=1.8
+# Numerics used by the fallback retriever + reporting
 numpy>=1.26
-
-# Transcription
-azure-cognitiveservices-speech>=1.37   # real-time (optional at runtime)
+pandas>=2.2
 
 # UI / API
 streamlit>=1.34
 fastapi>=0.110
 uvicorn>=0.29
-pandas>=2.2
 plotly>=5.20
 
-# Tooling / tests
+# Tests
 pytest>=8.1

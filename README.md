@@ -97,6 +97,27 @@ Real Azure Speech is used when `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` are se
 in `.env` (copy `.env.example`). Otherwise transcription falls back to the
 simulated source. Set `VCA_FORCE_SIMULATED=1` to always use the fallback.
 
+## Deploying to Streamlit Community Cloud
+
+The app is deploy-ready. Streamlit Cloud has a ~1 GB memory limit, so the root
+`requirements.txt` is a **lightweight set** — the app runs fully on its built-in
+fallbacks (keyword classifier + TF-IDF retriever) with no torch/transformers.
+For the fine-tuned transformer + semantic RAG + Azure Speech, install
+`requirements-full.txt` locally instead.
+
+Steps:
+
+1. Push the repo to GitHub (already has an `origin` remote).
+2. Go to <https://share.streamlit.io> and sign in with GitHub.
+3. **New app** → pick this repo and branch, set **Main file path** to
+   `app/streamlit_app.py`.
+4. In *Advanced settings*, select Python 3.11–3.13. Deploy.
+
+No secrets are required for the demo (transcription runs in simulated mode). To
+enable real Azure Speech in a deployment, add `AZURE_SPEECH_KEY` /
+`AZURE_SPEECH_REGION` under the app's *Secrets* and switch to
+`requirements-full.txt`.
+
 ## Compliance & design notes
 
 - **Advisory only.** The system never suspends collections, opens a case, or
