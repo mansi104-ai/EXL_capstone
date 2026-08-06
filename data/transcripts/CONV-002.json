@@ -1,0 +1,26 @@
+{
+  "conversation_id": "CONV-002",
+  "description": "Health + capability",
+  "turns": [
+    {
+      "speaker": "handler",
+      "text": "Hi, you're through to Acme, how can I help?"
+    },
+    {
+      "speaker": "customer",
+      "text": "I struggle with my memory since the stroke, I forget things."
+    },
+    {
+      "speaker": "handler",
+      "text": "No problem, we can take it slowly."
+    },
+    {
+      "speaker": "customer",
+      "text": "My daughter usually helps me with this sort of thing."
+    },
+    {
+      "speaker": "customer",
+      "text": "Can you explain that in plain English? I'm a bit lost."
+    }
+  ]
+}
