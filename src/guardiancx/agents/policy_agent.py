@@ -22,13 +22,18 @@ def run(state: AgentState) -> AgentState:
     ensure_ingested()
     store = get_vector_store()
     query = state.get("masked_text") or state.get("text", "")
+
+    # Retrieve the top-2 clauses per triggered driver, keep the highest-scoring
+    # unique clauses overall (cap the set so guidance stays focused).
     seen: set[str] = set()
-    retrieved: list[PolicyChunk] = []
+    candidates: list[PolicyChunk] = []
     for driver in assessment.triggered:
-        for chunk in store.query(query, driver=driver, top_k=1):
+        for chunk in store.query(query, driver=driver, top_k=2):
             if chunk.policy_reference not in seen:
                 seen.add(chunk.policy_reference)
-                retrieved.append(chunk)
+                candidates.append(chunk)
+    candidates.sort(key=lambda c: c.score, reverse=True)
+    retrieved = candidates[:4]
     state["retrieved"] = retrieved
     trace.append({
         "agent": "policy",

@@ -17,9 +17,6 @@ from ..utils.types import Driver, PolicyChunk
 from .chunking import Chunk, chunk_policy_dir
 
 log = get_logger("rag.vector_store")
-_COLLECTION = "guardiancx_policies"
-
-
 def _cosine(a: list[float], b: list[float]) -> float:
     num = sum(x * y for x, y in zip(a, b))
     da = math.sqrt(sum(x * x for x in a)) or 1.0
@@ -33,11 +30,17 @@ class VectorStore:
         self.backend = "in-memory"
         self._chroma = None
         self._mem: list[dict[str, Any]] = []
+        # Collection name is keyed to the embedding space, so switching embedders
+        # (e.g. hashing -> sentence-transformers) uses a fresh collection instead
+        # of mixing incompatible vectors.
+        collection = "guardiancx_policies_" + self.embedder.signature.replace("-", "_")
         try:
             import chromadb
 
             client = chromadb.PersistentClient(path=str(get_settings().chroma_dir))
-            self._chroma = client.get_or_create_collection(_COLLECTION)
+            self._chroma = client.get_or_create_collection(
+                collection, metadata={"hnsw:space": "cosine"},
+            )
             self.backend = "chromadb"
         except Exception as exc:  # noqa: BLE001
             log.warning("ChromaDB unavailable, using in-memory store: %s", exc)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections import Counter
 from typing import Optional
 
@@ -11,6 +12,7 @@ import streamlit as st
 from config.settings import get_settings
 
 from ..agents.graph import get_pipeline, process_conversation, process_turn
+from ..agents.prompts import HANDLER_REPLY_SYSTEM
 from ..database.db import backend_name
 from ..database.repository import (
     customer_timeline,
@@ -151,82 +153,84 @@ def _live_saved() -> None:
             _render_turn(turn, state)
 
 
-def _live_session() -> None:
-    """A real, sessionful conversation. Play the customer: type a message in the
-    chat box (or speak via Azure), and GuardianCX assesses each customer turn in
-    real time — detection, policy-grounded guidance, guardrails — and can draft a
-    suggested handler reply. Every customer turn is written to the evidence store,
-    so the session also appears in the dashboards, approval queue and audit trail.
-    """
+def _new_live_ids() -> None:
     ss = st.session_state
-    ss.setdefault("live_turns", [])
-    ss.setdefault("live_states", [])
-    ss.setdefault("live_conv_id", "LIVE-0001")
-    ss.setdefault("live_customer_id", "CUST-LIVE")
+    token = uuid.uuid4().hex[:6].upper()
+    ss["live_conv_id"] = f"LIVE-{token}"
+    ss["live_customer_id"] = f"CUST-{token}"
+    ss["live_turns"] = []
+    ss["live_states"] = []
+
+
+def _live_session() -> None:
+    """A clean customer chat. You play the customer: type (or speak) a message and
+    the handler agent replies in real time, grounded in policy. Behind each turn,
+    GuardianCX runs detection, RAG guidance and guardrails, and records evidence —
+    all visible in the expandable trace and across the other pages."""
+    ss = st.session_state
+    if "live_conv_id" not in ss:
+        _new_live_ids()
 
     llm = get_llm()
     speech = get_speech()
     sp_status = speech.status()
 
-    # --- controls -------------------------------------------------------
-    top = st.columns([2, 2, 2])
-    draft_reply = top[0].toggle(
-        "Agent replies", value=True,
-        help="After each customer turn the handler agent replies. Uses the LLM "
-             "when a key is set, otherwise a policy-grounded template.",
-    )
-    if top[1].button("Use microphone (customer)", disabled=not sp_status["available"],
-                     width="stretch"):
-        try:
-            with st.spinner("Listening…"):
-                spoken = speech.recognize_once()
-            if spoken:
-                _add_customer_turn(spoken, draft_reply)
-                st.rerun()
-            else:
-                st.warning("No speech was recognised.")
-        except Exception as exc:  # noqa: BLE001
-            st.error(f"Azure Speech error: {exc}")
-    if top[2].button("New session", width="stretch"):
-        ss["live_turns"], ss["live_states"] = [], []
-        st.rerun()
-
-    with st.expander("Session details & manual handler line"):
-        c1, c2 = st.columns(2)
-        ss["live_conv_id"] = c1.text_input("Conversation ID", ss["live_conv_id"])
-        ss["live_customer_id"] = c2.text_input("Customer ID", ss["live_customer_id"])
-        agent_line = st.text_input("Add a handler (agent) line manually",
-                                   placeholder="e.g. I'm sorry to hear that…")
-        if st.button("Add handler line") and agent_line.strip():
-            _append_turn("agent", agent_line.strip())
+    # --- header: reset + optional microphone ----------------------------
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown("**Speak with the customer-care agent.** Type a message below "
+                    "as the customer and the agent responds.")
+    with right:
+        b1, b2 = st.columns(2)
+        if b1.button("New conversation", width="stretch"):
+            _new_live_ids()
             st.rerun()
+        if b2.button("Speak", width="stretch", disabled=not sp_status["available"],
+                     help=None if sp_status["available"] else sp_status["reason"]):
+            try:
+                with st.spinner("Listening…"):
+                    spoken = speech.recognize_once()
+                if spoken:
+                    _add_customer_turn(spoken)
+                    st.rerun()
+                else:
+                    st.warning("No speech was recognised.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Azure Speech error: {exc}")
 
-    st.caption(
-        f"LLM: **{llm.provider_label}** · "
-        + (f"Speech: ready ({sp_status['region']})" if sp_status["available"]
-           else f"Speech: {sp_status['reason']}")
-    )
-
-    # --- chat input (pinned to the bottom of the page) ------------------
-    prompt = st.chat_input("Type the customer's message and press Enter…")
-    if prompt and prompt.strip():
-        _add_customer_turn(prompt.strip(), draft_reply)
-        st.rerun()
+    st.caption(f"Agent model: {llm.provider_label}  ·  Conversation {ss['live_conv_id']}")
 
     # --- conversation history -------------------------------------------
     if not ss["live_turns"]:
-        st.info("Start the conversation: type a customer message below, "
-                "use the microphone, or add a handler line above.")
+        st.info("Start the conversation — for example: "
+                "“My husband passed away last month and I'm struggling with the loan.”")
     for turn, state in zip(ss["live_turns"], ss["live_states"]):
         _render_turn(turn, state)
 
+    # --- chat input (pinned to the bottom) ------------------------------
+    prompt = st.chat_input("Type your message as the customer…")
+    if prompt and prompt.strip():
+        _add_customer_turn(prompt.strip())
+        st.rerun()
 
-def _add_customer_turn(text: str, draft_reply: bool) -> None:
+    # --- advanced (testers only) ----------------------------------------
+    with st.expander("Advanced (for testers)"):
+        st.caption("Add a handler line manually, or edit the session identifiers.")
+        line = st.text_input("Handler (agent) line", placeholder="e.g. I'm sorry to hear that…")
+        if st.button("Add handler line") and line.strip():
+            _append_turn("agent", line.strip())
+            st.rerun()
+        c1, c2 = st.columns(2)
+        ss["live_conv_id"] = c1.text_input("Conversation ID", ss["live_conv_id"])
+        ss["live_customer_id"] = c2.text_input("Customer ID", ss["live_customer_id"])
+
+
+def _add_customer_turn(text: str) -> None:
+    """Add a customer turn and always produce the agent's reply."""
     state = _append_turn("customer", text)
-    if draft_reply:
-        reply = _agent_reply(text, state)
-        if reply:
-            _append_turn("agent", reply)
+    reply = _agent_reply(text, state)
+    if reply:
+        _append_turn("agent", reply)
 
 
 _OPENERS = {
@@ -270,12 +274,8 @@ def _agent_reply(customer_text: str, state: dict) -> Optional[str]:
     if llm.available:
         rec = decision.recommendation if decision else None
         guidance = (rec.summary + " " + " ".join(rec.adaptations)) if rec else "(no specific policy retrieved)"
-        system = ("You are a UK bank handler replying to a customer who may be "
-                  "vulnerable. Write a short (1-3 sentence), warm, compliant reply. "
-                  "Reflect the policy guidance provided. Never promise actions "
-                  "outside policy, and never give financial or medical advice.")
         user = f"Customer said: {customer_text}\nPolicy guidance: {guidance}\n\nWrite the handler's reply:"
-        drafted = llm.text(system, user, max_tokens=180)
+        drafted = llm.text(HANDLER_REPLY_SYSTEM, user, max_tokens=180)
         if drafted and drafted.strip():
             return drafted.strip()
     return _template_reply(decision)

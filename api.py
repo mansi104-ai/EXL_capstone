@@ -32,7 +32,7 @@ from guardiancx.utils.types import Driver  # noqa: E402
 
 init_engine()
 ensure_ingested()
-app = FastAPI(title="GuardianCX", version="0.1.0")
+app = FastAPI(title="GuardianCX", version="0.2.0")
 
 
 class TurnRequest(BaseModel):

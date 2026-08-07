@@ -22,9 +22,9 @@ an enterprise multi-page Streamlit console and a FastAPI backend.
 |-------|-----------|----------------------------|
 | Frontend | **Streamlit** (multipage) | — |
 | Backend API | **FastAPI** | — |
-| LLM | **Claude** (`claude-opus-4-8`, structured JSON) | keyword heuristic |
+| LLM | **Claude** (`claude-opus-4-8`) **or OpenRouter** (any model), structured JSON | keyword heuristic |
 | Agent framework | **LangGraph** `StateGraph` | sequential runner |
-| Embeddings | **Azure OpenAI** | deterministic hashing embedder |
+| Embeddings | **Azure OpenAI** → **sentence-transformers** (local, semantic) | hashing embedder |
 | Speech | **Azure Speech** | text input |
 | Database | **PostgreSQL** | local SQLite |
 | Vector DB | **ChromaDB** (persistent) | in-memory cosine store |
@@ -96,10 +96,18 @@ uvicorn api:app --reload    # http://localhost:8000/docs
 
 All via environment variables / `.env` (see `.env.example`). Highlights:
 
-- `ANTHROPIC_API_KEY` — enables Claude for detection + guidance.
-- `AZURE_OPENAI_*` — enables Azure OpenAI embeddings for RAG.
+- `ANTHROPIC_API_KEY` — enables Claude for detection + guidance, **or**
+- `OPENROUTER_API_KEY` + `OPENROUTER_MODEL` — use any OpenRouter model instead
+  (used only when the Anthropic key is empty). With neither, the app runs on the
+  deterministic heuristic.
+- `AZURE_OPENAI_*` — Azure OpenAI embeddings for RAG (otherwise a local
+  sentence-transformers model is used; the hashing embedder is the last resort).
+- `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` — live speech in the chat.
 - `GUARDIANCX_DATABASE_URL` — Postgres URL (else SQLite file).
 - `GUARDIANCX_CONFIDENCE_THRESHOLD`, `GUARDIANCX_HIGH_RISK_APPROVAL` — guardrail tuning.
+
+Agent system prompts live in `src/guardiancx/agents/prompts.py`. The product
+roadmap is in [ROADMAP.md](ROADMAP.md).
 
 ## Extending
 

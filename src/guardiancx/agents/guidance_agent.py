@@ -10,14 +10,10 @@ from __future__ import annotations
 
 from ..services.claude_client import get_claude
 from ..utils.types import Recommendation, RiskLevel
+from .prompts import GUIDANCE_SYSTEM
 from .state import AgentState
 
-_SYSTEM = (
-    "You are an advisory guidance assistant for bank agents handling potentially "
-    "vulnerable customers. Using ONLY the provided policy clauses, write a short "
-    "adaptation the human agent could offer. Never invent policy. Cite the clause "
-    "references you used. Output is advisory only — the agent decides."
-)
+_SYSTEM = GUIDANCE_SYSTEM
 
 _SCHEMA = {
     "type": "object",
