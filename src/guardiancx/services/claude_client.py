@@ -25,6 +25,24 @@ from ..utils.logging import get_logger
 log = get_logger("services.llm")
 
 
+def _extract_json(content: Optional[str]) -> Optional[dict[str, Any]]:
+    """Best-effort parse of a JSON object from model output (handles prose /
+    markdown fences by extracting the outermost {...})."""
+    if not content:
+        return None
+    try:
+        return json.loads(content)
+    except Exception:  # noqa: BLE001
+        pass
+    start, end = content.find("{"), content.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(content[start:end + 1])
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
 class LLMClient:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
@@ -97,24 +115,30 @@ class LLMClient:
             return None
 
     def _openrouter_structured(self, system, user, schema, max_tokens):
-        # OpenAI-compatible JSON mode. Embed the schema in the prompt so any
-        # model returns a parseable object even without native json_schema support.
+        # OpenAI-compatible JSON. Embed the schema in the prompt so any model
+        # returns a parseable object even without native json_schema support.
+        # Some OpenRouter routes reject response_format, so retry without it and
+        # extract the JSON object from the text.
         sys_prompt = (
             f"{system}\n\nRespond ONLY with a single JSON object that matches "
-            f"this JSON schema (no prose, no markdown):\n{json.dumps(schema)}"
+            f"this JSON schema — no prose, no markdown fences:\n{json.dumps(schema)}"
         )
-        try:
-            resp = self._openai.chat.completions.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                messages=[{"role": "system", "content": sys_prompt},
-                          {"role": "user", "content": user}],
-                response_format={"type": "json_object"},
-            )
-            return json.loads(resp.choices[0].message.content)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("OpenRouter structured call failed, falling back: %s", exc)
-            return None
+        messages = [{"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user}]
+        for use_response_format in (True, False):
+            try:
+                kwargs: dict[str, Any] = dict(model=self.model, max_tokens=max_tokens,
+                                              messages=messages)
+                if use_response_format:
+                    kwargs["response_format"] = {"type": "json_object"}
+                resp = self._openai.chat.completions.create(**kwargs)
+                parsed = _extract_json(resp.choices[0].message.content)
+                if parsed is not None:
+                    return parsed
+            except Exception as exc:  # noqa: BLE001
+                log.warning("OpenRouter structured attempt (response_format=%s) failed: %s",
+                            use_response_format, exc)
+        return None
 
     # --- plain text ------------------------------------------------------
     def text(self, system: str, user: str, max_tokens: int = 600) -> Optional[str]:

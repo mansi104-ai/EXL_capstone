@@ -171,9 +171,9 @@ def _live_session() -> None:
     # --- controls -------------------------------------------------------
     top = st.columns([2, 2, 2])
     draft_reply = top[0].toggle(
-        "AI drafts a handler reply", value=False, disabled=not llm.available,
-        help="After each customer turn, draft a suggested handler response "
-             + ("" if llm.available else "(needs an LLM key — Anthropic or OpenRouter)"),
+        "Agent replies", value=True,
+        help="After each customer turn the handler agent replies. Uses the LLM "
+             "when a key is set, otherwise a policy-grounded template.",
     )
     if top[1].button("Use microphone (customer)", disabled=not sp_status["available"],
                      width="stretch"):
@@ -222,39 +222,72 @@ def _live_session() -> None:
 
 
 def _add_customer_turn(text: str, draft_reply: bool) -> None:
-    _append_turn("customer", text)
+    state = _append_turn("customer", text)
     if draft_reply:
-        reply = _draft_handler_reply(text)
+        reply = _agent_reply(text, state)
         if reply:
             _append_turn("agent", reply)
 
 
-def _draft_handler_reply(customer_text: str) -> Optional[str]:
-    """Use the LLM to draft an empathetic, advisory handler reply (never sent
-    automatically — it is a suggestion the human handler can use or edit)."""
+_OPENERS = {
+    Driver.LIFE_EVENTS: "I'm very sorry to hear that.",
+    Driver.HEALTH: "Thank you for letting me know, and I'm sorry you're dealing with this.",
+    Driver.RESILIENCE: "I understand, and I want to make this as manageable as possible for you.",
+    Driver.CAPABILITY: "Of course — I'll keep this simple and go at your pace.",
+}
+
+
+def _short(text: str, limit: int = 220) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    dot = cut.rfind(". ")
+    return (cut[: dot + 1] if dot > 60 else cut).rstrip() + "…"
+
+
+def _template_reply(decision) -> str:
+    """A policy-grounded handler reply, used when no LLM key is configured."""
+    if decision is None:
+        return "Thank you — how can I help you today?"
+    triggered = decision.assessment.triggered
+    if not triggered:
+        return "Thanks — I can help you with that. Let me pull up your account."
+    top = max(decision.assessment.signals, key=lambda s: s.score).driver
+    opener = _OPENERS.get(top, "Thank you for telling me.")
+    rec = decision.recommendation
+    if rec and rec.adaptations:
+        return f"{opener} Here's how I can help, in line with our policy: {_short(rec.adaptations[0])}"
+    return f"{opener} Let me talk you through the support available."
+
+
+def _agent_reply(customer_text: str, state: dict) -> Optional[str]:
+    """The handler agent's reply. LLM-drafted when a key is configured, otherwise
+    a policy-grounded template — so there is always a response. Advisory: the
+    human handler would send/edit it, never the system."""
+    decision = state.get("decision")
     llm = get_llm()
-    if not llm.available:
-        return None
-    ss = st.session_state
-    # Ground the reply in whatever guidance the pipeline just produced.
-    guidance = ""
-    if ss["live_states"]:
-        rec = ss["live_states"][-1].get("decision")
-        if rec and rec.recommendation:
-            guidance = rec.recommendation.summary + " " + " ".join(rec.recommendation.adaptations)
-    system = ("You are drafting a short, warm, compliant reply for a bank handler "
-              "to a customer who may be vulnerable. 1-3 sentences. Never promise "
-              "actions outside policy. Reflect the guidance if provided.")
-    user = f"Customer said: {customer_text}\nPolicy guidance: {guidance or '(none)'}\nDraft the handler's reply:"
-    return llm.text(system, user, max_tokens=180)
+    if llm.available:
+        rec = decision.recommendation if decision else None
+        guidance = (rec.summary + " " + " ".join(rec.adaptations)) if rec else "(no specific policy retrieved)"
+        system = ("You are a UK bank handler replying to a customer who may be "
+                  "vulnerable. Write a short (1-3 sentence), warm, compliant reply. "
+                  "Reflect the policy guidance provided. Never promise actions "
+                  "outside policy, and never give financial or medical advice.")
+        user = f"Customer said: {customer_text}\nPolicy guidance: {guidance}\n\nWrite the handler's reply:"
+        drafted = llm.text(system, user, max_tokens=180)
+        if drafted and drafted.strip():
+            return drafted.strip()
+    return _template_reply(decision)
 
 
-def _append_turn(speaker: str, text: str) -> None:
+def _append_turn(speaker: str, text: str) -> dict:
     ss = st.session_state
     idx = len(ss["live_turns"])
     state = process_turn(ss["live_conv_id"], ss["live_customer_id"], idx, speaker, text)
     ss["live_turns"].append({"speaker": speaker, "text": text})
     ss["live_states"].append(state)
+    return state
 
 
 def _render_recommendation(decision) -> None:

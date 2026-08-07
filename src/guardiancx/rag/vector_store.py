@@ -131,10 +131,14 @@ def get_vector_store() -> VectorStore:
 
 
 def ensure_ingested() -> int:
-    """Ingest the policy corpus if the store is empty. Returns chunk count."""
+    """Ingest the policy corpus, re-ingesting when the files on disk have changed
+    (e.g. a new policy document was added). Returns the indexed chunk count."""
     from config.settings import POLICY_DIR
 
+    from .chunking import chunk_policy_dir
+
     store = get_vector_store()
-    if store.count() == 0:
+    expected = len(chunk_policy_dir(POLICY_DIR))
+    if store.count() != expected:
         store.ingest_dir(POLICY_DIR)
     return store.count()

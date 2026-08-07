@@ -78,7 +78,8 @@ def run(state: AgentState) -> AgentState:
         f"Relevant policy clauses:\n{policy_text}\n\n"
         "Write the advisory adaptation grounded only in these clauses."
     )
-    result = get_claude().structured(_SYSTEM, user, _SCHEMA, max_tokens=800)
+    llm = get_claude()
+    result = llm.structured(_SYSTEM, user, _SCHEMA, max_tokens=800)
     if result:
         # Keep only citations that were actually retrieved (defense in depth).
         valid_refs = {c.policy_reference for c in retrieved}
@@ -89,7 +90,7 @@ def run(state: AgentState) -> AgentState:
             citations=citations,
             confidence=float(result.get("confidence", 0.0)),
             risk_level=RiskLevel(result.get("risk_level", "medium")),
-            source="claude",
+            source=llm.provider,
         )
         # Risk floor from deterministic driver logic (don't let the LLM under-rate).
         floor = _risk_from_assessment(assessment)
