@@ -261,7 +261,7 @@ def _live_session() -> None:
         _render_turn(turn, state)
 
     # --- chat input (pinned to the bottom) ------------------------------
-    prompt = st.chat_input("Type your message as the customer…")
+    prompt = st.chat_input("Type your message…")
     if prompt and prompt.strip():
         _add_customer_turn(prompt.strip())
         st.rerun()
