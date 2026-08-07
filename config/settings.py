@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     guardiancx_claude_model: str = "claude-opus-4-8"
 
+    # --- OpenRouter (alternative LLM provider; OpenAI-compatible) ---
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-sonnet-4.5"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
     # --- Azure OpenAI embeddings ---
     azure_openai_api_key: str = ""
     azure_openai_endpoint: str = ""
@@ -74,6 +79,14 @@ class Settings(BaseSettings):
     @property
     def claude_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def openrouter_enabled(self) -> bool:
+        return bool(self.openrouter_api_key)
+
+    @property
+    def llm_enabled(self) -> bool:
+        return self.claude_enabled or self.openrouter_enabled
 
     @property
     def azure_embeddings_enabled(self) -> bool:

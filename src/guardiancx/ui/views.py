@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -22,7 +23,7 @@ from ..database.repository import (
 from ..guardrails.base import GuardrailContext
 from ..guardrails.manager import get_guardrail_manager
 from ..rag.vector_store import ensure_ingested, get_vector_store
-from ..services.claude_client import get_claude
+from ..services.claude_client import get_claude, get_llm
 from ..services.embeddings import get_embedder
 from ..services.observability import get_observability
 from ..services.speech import get_speech
@@ -108,7 +109,7 @@ def _download_report(df: pd.DataFrame, name: str) -> None:
 # --------------------------------------------------------------------------- #
 def _render_turn(turn: dict, state: dict) -> None:
     role = "user" if turn["speaker"] == "customer" else "assistant"
-    with st.chat_message(role, avatar="C" if role == "user" else "A"):
+    with st.chat_message(role):
         st.markdown(f"**{turn['speaker'].title()}:** {turn['text']}")
         decision = state.get("decision")
         if turn["speaker"] != "customer" or decision is None:
@@ -151,69 +152,104 @@ def _live_saved() -> None:
 
 
 def _live_session() -> None:
-    """A real, sessionful conversation: type or speak turns and watch the agent
-    respond in real time. Each customer turn runs through the full pipeline and
-    is written to the evidence store, so it also appears in the dashboards."""
+    """A real, sessionful conversation. Play the customer: type a message in the
+    chat box (or speak via Azure), and GuardianCX assesses each customer turn in
+    real time — detection, policy-grounded guidance, guardrails — and can draft a
+    suggested handler reply. Every customer turn is written to the evidence store,
+    so the session also appears in the dashboards, approval queue and audit trail.
+    """
     ss = st.session_state
     ss.setdefault("live_turns", [])
     ss.setdefault("live_states", [])
     ss.setdefault("live_conv_id", "LIVE-0001")
     ss.setdefault("live_customer_id", "CUST-LIVE")
 
-    with st.expander("Session details", expanded=not ss["live_turns"]):
-        c1, c2 = st.columns(2)
-        ss["live_conv_id"] = c1.text_input("Conversation ID", ss["live_conv_id"])
-        ss["live_customer_id"] = c2.text_input("Customer ID", ss["live_customer_id"])
-
+    llm = get_llm()
     speech = get_speech()
     sp_status = speech.status()
 
-    c1, c2, c3 = st.columns([1, 1, 1])
-    with c1:
-        speaker = st.selectbox("Speaker", ["customer", "agent"], label_visibility="collapsed")
-    # Text entry
-    with st.form("live_turn", clear_on_submit=True):
-        text = st.text_input("Turn", placeholder="Type what was said, then press Add…",
-                             label_visibility="collapsed")
-        submitted = st.form_submit_button("Add turn", type="primary")
-    if submitted and text.strip():
-        _append_live_turn(speaker, text.strip())
-        st.rerun()
-
-    # Microphone (Azure Speech)
-    m1, m2 = st.columns([1, 3])
-    if m1.button("Use microphone (customer)", disabled=not sp_status["available"]):
+    # --- controls -------------------------------------------------------
+    top = st.columns([2, 2, 2])
+    draft_reply = top[0].toggle(
+        "AI drafts a handler reply", value=False, disabled=not llm.available,
+        help="After each customer turn, draft a suggested handler response "
+             + ("" if llm.available else "(needs an LLM key — Anthropic or OpenRouter)"),
+    )
+    if top[1].button("Use microphone (customer)", disabled=not sp_status["available"],
+                     width="stretch"):
         try:
             with st.spinner("Listening…"):
                 spoken = speech.recognize_once()
             if spoken:
-                _append_live_turn("customer", spoken)
+                _add_customer_turn(spoken, draft_reply)
                 st.rerun()
             else:
                 st.warning("No speech was recognised.")
         except Exception as exc:  # noqa: BLE001
             st.error(f"Azure Speech error: {exc}")
-    with m2:
-        if sp_status["available"]:
-            st.caption(f"Azure Speech ready · region `{sp_status['region']}` · "
-                       "microphone capture runs on the machine hosting the app.")
-        else:
-            st.caption(f"Microphone disabled — {sp_status['reason']}")
-
-    b1, b2 = st.columns([1, 5])
-    if b1.button("New session"):
-        ss["live_turns"] = []
-        ss["live_states"] = []
+    if top[2].button("New session", width="stretch"):
+        ss["live_turns"], ss["live_states"] = [], []
         st.rerun()
 
-    st.divider()
+    with st.expander("Session details & manual handler line"):
+        c1, c2 = st.columns(2)
+        ss["live_conv_id"] = c1.text_input("Conversation ID", ss["live_conv_id"])
+        ss["live_customer_id"] = c2.text_input("Customer ID", ss["live_customer_id"])
+        agent_line = st.text_input("Add a handler (agent) line manually",
+                                   placeholder="e.g. I'm sorry to hear that…")
+        if st.button("Add handler line") and agent_line.strip():
+            _append_turn("agent", agent_line.strip())
+            st.rerun()
+
+    st.caption(
+        f"LLM: **{llm.provider_label}** · "
+        + (f"Speech: ready ({sp_status['region']})" if sp_status["available"]
+           else f"Speech: {sp_status['reason']}")
+    )
+
+    # --- chat input (pinned to the bottom of the page) ------------------
+    prompt = st.chat_input("Type the customer's message and press Enter…")
+    if prompt and prompt.strip():
+        _add_customer_turn(prompt.strip(), draft_reply)
+        st.rerun()
+
+    # --- conversation history -------------------------------------------
     if not ss["live_turns"]:
-        st.info("Add a turn or use the microphone to begin the conversation.")
+        st.info("Start the conversation: type a customer message below, "
+                "use the microphone, or add a handler line above.")
     for turn, state in zip(ss["live_turns"], ss["live_states"]):
         _render_turn(turn, state)
 
 
-def _append_live_turn(speaker: str, text: str) -> None:
+def _add_customer_turn(text: str, draft_reply: bool) -> None:
+    _append_turn("customer", text)
+    if draft_reply:
+        reply = _draft_handler_reply(text)
+        if reply:
+            _append_turn("agent", reply)
+
+
+def _draft_handler_reply(customer_text: str) -> Optional[str]:
+    """Use the LLM to draft an empathetic, advisory handler reply (never sent
+    automatically — it is a suggestion the human handler can use or edit)."""
+    llm = get_llm()
+    if not llm.available:
+        return None
+    ss = st.session_state
+    # Ground the reply in whatever guidance the pipeline just produced.
+    guidance = ""
+    if ss["live_states"]:
+        rec = ss["live_states"][-1].get("decision")
+        if rec and rec.recommendation:
+            guidance = rec.recommendation.summary + " " + " ".join(rec.recommendation.adaptations)
+    system = ("You are drafting a short, warm, compliant reply for a bank handler "
+              "to a customer who may be vulnerable. 1-3 sentences. Never promise "
+              "actions outside policy. Reflect the guidance if provided.")
+    user = f"Customer said: {customer_text}\nPolicy guidance: {guidance or '(none)'}\nDraft the handler's reply:"
+    return llm.text(system, user, max_tokens=180)
+
+
+def _append_turn(speaker: str, text: str) -> None:
     ss = st.session_state
     idx = len(ss["live_turns"])
     state = process_turn(ss["live_conv_id"], ss["live_customer_id"], idx, speaker, text)
@@ -472,10 +508,11 @@ def analytics() -> None:
 def settings_page() -> None:
     C.hero("Settings", "Integration status, thresholds, and data controls.")
     s = get_settings()
-    claude = get_claude()
+    llm = get_llm()
     store = get_vector_store()
     rows = [
-        ("LLM · Claude", "🟢 " + claude.model if claude.available else "🟡 fallback (heuristic)"),
+        ("LLM provider", ("🟢 " + llm.provider_label) if llm.available
+         else "🟡 heuristic (set ANTHROPIC_API_KEY or OPENROUTER_API_KEY)"),
         ("Agent framework · LangGraph", "🟢 langgraph" if get_pipeline().backend == "langgraph" else "🟡 sequential fallback"),
         ("Vector DB · ChromaDB", "🟢 chromadb" if store.backend == "chromadb" else "🟡 in-memory fallback"),
         ("Embeddings · Azure OpenAI", "🟢 azure" if s.azure_embeddings_enabled else "🟡 hashing fallback"),
