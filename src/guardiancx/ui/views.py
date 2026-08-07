@@ -175,30 +175,39 @@ def _live_session() -> None:
     speech = get_speech()
     sp_status = speech.status()
 
-    # --- header: reset + optional microphone ----------------------------
-    left, right = st.columns([3, 2])
+    # --- header: reset ---------------------------------------------------
+    left, right = st.columns([3, 1])
     with left:
         st.markdown("**Speak with the customer-care agent.** Type a message below "
                     "as the customer and the agent responds.")
     with right:
-        b1, b2 = st.columns(2)
-        if b1.button("New conversation", width="stretch"):
+        if st.button("New conversation", width="stretch"):
             _new_live_ids()
             st.rerun()
-        if b2.button("Speak", width="stretch", disabled=not sp_status["available"],
-                     help=None if sp_status["available"] else sp_status["reason"]):
-            try:
-                with st.spinner("Listening…"):
-                    spoken = speech.recognize_once()
-                if spoken:
-                    _add_customer_turn(spoken)
-                    st.rerun()
-                else:
-                    st.warning("No speech was recognised.")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Azure Speech error: {exc}")
 
     st.caption(f"Agent model: {llm.provider_label}  ·  Conversation {ss['live_conv_id']}")
+
+    # --- optional voice input (browser capture — works when deployed) ----
+    if sp_status["available"]:
+        with st.expander("Speak instead of typing (voice)"):
+            audio = st.audio_input("Record the customer, then stop")
+            if audio is not None:
+                data = audio.getvalue()
+                fingerprint = hash(data)
+                if data and fingerprint != ss.get("live_last_audio"):
+                    ss["live_last_audio"] = fingerprint
+                    try:
+                        with st.spinner("Transcribing…"):
+                            spoken = speech.transcribe_wav(data)
+                        if spoken:
+                            _add_customer_turn(spoken)
+                            st.rerun()
+                        else:
+                            st.warning("No speech was recognised — please try again.")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"Speech transcription failed: {exc}")
+    else:
+        st.caption(f"Voice input off — {sp_status['reason']}")
 
     # --- conversation history -------------------------------------------
     if not ss["live_turns"]:

@@ -6,6 +6,7 @@ rest of the app can pick a real client or a graceful fallback.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -16,6 +17,34 @@ GUARDIANCX_ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS_DIR = GUARDIANCX_ROOT / "artifacts"
 DATA_DIR = GUARDIANCX_ROOT / "data"
 POLICY_DIR = DATA_DIR / "policies"
+
+
+def _hydrate_from_streamlit_secrets() -> None:
+    """Copy Streamlit secrets into the environment.
+
+    On Streamlit Community Cloud there is no .env file — configuration is supplied
+    through the app's **Secrets** (a TOML) and exposed via ``st.secrets``. We copy
+    the top-level scalar secrets into ``os.environ`` (without overwriting anything
+    already set) so pydantic-settings picks them up exactly as it does locally.
+    Nested tables are flattened one level (e.g. [azure] key = ... -> AZURE_KEY).
+    """
+    try:
+        import streamlit as st
+
+        secrets = st.secrets  # raises if no secrets are configured
+        for key in secrets.keys():
+            value = secrets[key]
+            if isinstance(value, (str, int, float, bool)):
+                os.environ.setdefault(str(key), str(value))
+            else:  # a nested [table]; export TABLE_SUBKEY entries
+                try:
+                    for sub, subval in value.items():
+                        if isinstance(subval, (str, int, float, bool)):
+                            os.environ.setdefault(f"{key}_{sub}".upper(), str(subval))
+                except Exception:  # noqa: BLE001
+                    continue
+    except Exception:  # noqa: BLE001 - no streamlit / no secrets: nothing to do
+        return
 
 
 class Settings(BaseSettings):
@@ -107,4 +136,8 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    # Pull Streamlit Cloud secrets into the environment first, then build settings
+    # (env vars take precedence over the .env file, and .env may not exist in the
+    # cloud). Locally this is a no-op unless a .streamlit/secrets.toml is present.
+    _hydrate_from_streamlit_secrets()
     return Settings()

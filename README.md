@@ -109,6 +109,30 @@ All via environment variables / `.env` (see `.env.example`). Highlights:
 Agent system prompts live in `src/guardiancx/agents/prompts.py`. The product
 roadmap is in [ROADMAP.md](ROADMAP.md).
 
+## Deploying to Streamlit Community Cloud
+
+Configuration on the cloud comes from **Streamlit secrets**, not a `.env` file.
+In the app's **Settings → Secrets**, paste the keys you need (top-level, named
+exactly as in [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example)):
+
+```toml
+OPENROUTER_API_KEY = "sk-or-..."
+OPENROUTER_MODEL   = "anthropic/claude-sonnet-4.5"
+AZURE_SPEECH_KEY   = "..."
+AZURE_SPEECH_REGION = "eastus"
+```
+
+The app reads `st.secrets` and hydrates them into its settings automatically, so
+the same code path works locally (`.env`) and on the cloud (secrets). Main file:
+`app.py`.
+
+Notes for the cloud:
+- **Voice input** uses in-browser recording (`st.audio_input`) → Azure Speech
+  REST, so it works on the cloud (no host microphone needed).
+- Embeddings fall back to the local hashing embedder unless you add
+  `sentence-transformers` (heavier) or Azure OpenAI embeddings; for best
+  retrieval quality run locally or configure Azure OpenAI.
+
 ## Extending
 
 - **Add a guardrail** — subclass `guardrails.base.Guardrail`, implement `check`,
