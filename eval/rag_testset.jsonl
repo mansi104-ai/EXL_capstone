@@ -1,0 +1,22 @@
+{"query": "My husband passed away last month and I need to deal with the joint loan", "driver": "life_events", "expected": ["VP-L1"]}
+{"query": "My mother died recently and I'm the executor of her estate", "driver": "life_events", "expected": ["VP-L1"]}
+{"query": "We are going through a divorce and need to split the joint account", "driver": "life_events", "expected": ["VP-L2"]}
+{"query": "I lost my job on Friday and I'm worried about my payments", "driver": "life_events", "expected": ["VP-L3"]}
+{"query": "I've had to stop working to care for my disabled son full time", "driver": "life_events", "expected": ["VP-L4"]}
+{"query": "I'm on maternity leave with a new baby and my income has dropped", "driver": "life_events", "expected": ["VP-L6"]}
+{"query": "My partner controls all the money and I'm scared, please don't read details aloud", "driver": "life_events", "expected": ["VP-L5"]}
+{"query": "I've just been diagnosed with cancer and I'm starting chemotherapy", "driver": "health", "expected": ["VP-H1"]}
+{"query": "My anxiety and depression are really bad and I'm not coping", "driver": "health", "expected": ["VP-H2"]}
+{"query": "I struggle with my memory since the stroke and forget things", "driver": "health", "expected": ["VP-H3"]}
+{"query": "I'm feeling hopeless and having thoughts of harming myself", "driver": "health", "expected": ["VP-H4"]}
+{"query": "My gambling has got out of control and it's affecting my finances", "driver": "health", "expected": ["VP-H5"]}
+{"query": "I genuinely can't afford this payment, I'm choosing between heating and eating", "driver": "resilience", "expected": ["VP-R1"]}
+{"query": "I owe money to five different lenders and keep borrowing to repay", "driver": "resilience", "expected": ["VP-R2"]}
+{"query": "I have no savings at all, one unexpected bill would finish me", "driver": "resilience", "expected": ["VP-R3"]}
+{"query": "I have to choose between paying rent, energy and this card", "driver": "resilience", "expected": ["VP-R4"]}
+{"query": "My income dropped and I'm not sure I'm getting all the benefits I'm entitled to", "driver": "resilience", "expected": ["VP-R5"]}
+{"query": "I don't understand these financial terms, can you explain in plain English", "driver": "capability", "expected": ["VP-C1"]}
+{"query": "English isn't my first language and I find it hard to follow", "driver": "capability", "expected": ["VP-C2"]}
+{"query": "I have power of attorney and want to add my son as a trusted person", "driver": "capability", "expected": ["VP-C3"]}
+{"query": "I don't have a smartphone or internet and can't use the app", "driver": "capability", "expected": ["VP-C4"]}
+{"query": "Someone told me to move my money to a safe account urgently", "driver": "capability", "expected": ["VP-C5"]}

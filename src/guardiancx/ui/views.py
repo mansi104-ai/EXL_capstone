@@ -31,6 +31,7 @@ from ..services.observability import get_observability
 from ..services.speech import get_speech
 from ..services.synthetic_data import list_conversations
 from ..utils.types import Driver, PolicyChunk, Recommendation, RiskLevel
+from . import charts as CH
 from . import components as C
 
 DRIVERS = [d.value for d in Driver]
@@ -57,44 +58,87 @@ def _driver_counts(df: pd.DataFrame) -> dict[str, int]:
 # --------------------------------------------------------------------------- #
 # 1. Executive Dashboard
 # --------------------------------------------------------------------------- #
+def _guardrail_activations(df: pd.DataFrame) -> dict[str, int]:
+    counts: Counter = Counter()
+    if df.empty:
+        return {}
+    for results in df["guardrails"]:
+        for r in results or []:
+            if not r.get("passed", True):
+                counts[r.get("name", "?")] += 1
+    return dict(counts)
+
+
+def _acceptance_rate(df: pd.DataFrame) -> float:
+    if df.empty:
+        return 0.0
+    responded = df["approval_status"].isin(["approved", "rejected", "modified"]).sum()
+    accepted = (df["approval_status"] == "approved").sum()
+    return float(accepted / responded) if responded else 0.0
+
+
+def _plot(fig, key: str) -> None:
+    st.plotly_chart(fig, use_container_width=True, theme="streamlit",
+                    config={"displayModeBar": False}, key=key)
+
+
 def exec_dashboard() -> None:
     C.hero("Executive Dashboard",
-           "Portfolio view of vulnerable-customer detection, risk and evidenced fair treatment.")
+           "Portfolio view of vulnerable-customer detection, risk, and evidenced fair treatment.")
     df = _evidence_df()
+    conversations = df["conversation_id"].nunique() if not df.empty else 0
     total = len(df)
     flagged = int(df["triggered_drivers"].apply(lambda x: bool(x)).sum()) if not df.empty else 0
     high = int((df["risk_level"] == "high").sum()) if not df.empty else 0
     pending = len(list_pending())
     ok, _ = verify_chain()
+    acceptance = _acceptance_rate(df)
+    flag_rate = (flagged / total) if total else 0.0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1: C.metric_card("Turns assessed", total)
-    with c2: C.metric_card("Vulnerability signals", flagged)
-    with c3: C.metric_card("High-risk cases", high)
-    with c4: C.metric_card("Pending approvals", pending)
-    with c5: C.metric_card("Evidence chain", "Verified" if ok else "At risk")
+    # KPI tiles -----------------------------------------------------------
+    row1 = st.columns(3)
+    with row1[0]: C.metric_card("Conversations monitored", conversations, f"{total} turns assessed")
+    with row1[1]: C.metric_card("Vulnerability signals", flagged, f"{flag_rate*100:.0f}% of turns flagged")
+    with row1[2]: C.metric_card("High-risk cases", high, "acute / sensitive circumstances")
+    row2 = st.columns(3)
+    with row2[0]: C.metric_card("Pending approvals", pending, "awaiting supervisor sign-off")
+    with row2[1]: C.metric_card("Guidance acceptance", f"{acceptance*100:.0f}%", "of decided recommendations")
+    with row2[2]: C.metric_card("Evidence integrity", "Verified" if ok else "At risk",
+                                "append-only, hash-chained")
+
+    if df.empty:
+        st.info("No activity yet. Seed the synthetic conversations on the Settings "
+                "page, or start a Live session, to populate the portfolio view.")
+        return
 
     st.divider()
     a, b = st.columns(2)
     with a:
         st.markdown("**Detections by vulnerability driver**")
-        st.bar_chart(pd.DataFrame({"count": _driver_counts(df)}))
+        _plot(CH.driver_bar(_driver_counts(df)), "gx_driver")
     with b:
-        st.markdown("**Risk distribution**")
-        if not df.empty:
-            st.bar_chart(df["risk_level"].value_counts().rename_axis("risk").to_frame("count"))
-        else:
-            st.info("No data yet — seed conversations on the Settings page.")
+        st.markdown("**Cases by risk level**")
+        risk_counts = df["risk_level"].value_counts().to_dict()
+        _plot(CH.risk_bar(risk_counts), "gx_risk")
 
-    st.markdown("**Recent high-risk cases**")
-    if not df.empty:
-        hi = df[df["risk_level"] == "high"][
-            ["created_at", "conversation_id", "customer_id", "triggered_drivers",
-             "recommendation", "approval_status"]
-        ].head(10)
-        st.dataframe(hi, width="stretch")
-    else:
+    c, d = st.columns(2)
+    with c:
+        st.markdown("**Handler outcomes**")
+        _plot(CH.outcome_bar(df["approval_status"].value_counts().to_dict()), "gx_outcome")
+    with d:
+        st.markdown("**Guardrail activations**")
+        _plot(CH.guardrail_bar(_guardrail_activations(df)), "gx_guard")
+
+    st.divider()
+    st.markdown("**Recent high-risk cases** — routed to the Human Approval Queue")
+    hi = df[df["risk_level"] == "high"][
+        ["created_at", "conversation_id", "customer_id", "triggered_drivers",
+         "recommendation", "approval_status"]
+    ].head(10)
+    if hi.empty:
         st.caption("No high-risk cases recorded.")
+    else:
+        st.dataframe(hi, width="stretch", hide_index=True)
 
     _download_report(df, "executive_report")
 
@@ -509,36 +553,98 @@ def customer_timeline_page() -> None:
 # --------------------------------------------------------------------------- #
 # 10. Analytics & Evaluation
 # --------------------------------------------------------------------------- #
-def analytics() -> None:
-    C.hero("Analytics & Evaluation", "Model behaviour, detection mix, and fair-treatment outcomes.")
-    df = _evidence_df()
-    if df.empty:
-        st.info("No data — seed conversations on the Settings page.")
+@st.cache_data(show_spinner=False)
+def _rag_eval_cached(k: int, embedder_signature: str) -> dict:
+    """Cached RAG evaluation. `embedder_signature` busts the cache when the
+    embedding backend changes."""
+    from ..rag.evaluation import evaluate_rag, load_testset
+
+    report = evaluate_rag(load_testset(), k=k)
+    return {
+        "summary": report.as_summary(),
+        "per_driver": report.per_driver,
+        "rows": [
+            {
+                "driver": r.driver,
+                "query": r.query,
+                "expected": ", ".join(r.expected),
+                "retrieved (top-k)": ", ".join(r.retrieved),
+                "hit": "✓" if r.hit else "✗",
+                "RR": round(r.reciprocal_rank, 2),
+            }
+            for r in report.results
+        ],
+    }
+
+
+def _rag_evaluation_section() -> None:
+    st.subheader("Retrieval quality — RAG evaluation")
+    st.caption("Measured on a labelled test set (query → expected policy clause), "
+               "scoped by driver exactly as the Policy Retrieval agent queries. "
+               "This is how retrieval quality is proven, not spot-checked.")
+    from ..services.embeddings import get_embedder
+
+    k = st.select_slider("Cut-off (k)", options=[1, 2, 3, 5], value=3)
+    embedder = get_embedder()
+    try:
+        ev = _rag_eval_cached(k, embedder.signature)
+    except FileNotFoundError:
+        st.warning("Test set not found (eval/rag_testset.jsonl).")
         return
 
+    s = ev["summary"]
+    m = st.columns(4)
+    with m[0]: C.metric_card(f"Hit-rate@{k}", f"{s['hit_rate@k']*100:.0f}%", "≥1 correct clause in top-k")
+    with m[1]: C.metric_card(f"Precision@{k}", f"{s['precision@k']:.2f}", "relevant / k")
+    with m[2]: C.metric_card(f"Recall@{k}", f"{s['recall@k']:.2f}", "relevant / expected")
+    with m[3]: C.metric_card("MRR", f"{s['mrr']:.2f}", "mean reciprocal rank")
+
+    st.caption(f"Embedder: {embedder.backend}  ·  {s['queries']} queries")
+    st.markdown("**Hit-rate by driver**")
+    _plot(CH.driver_bar({d: round(v * 100) for d, v in ev["per_driver"].items()}), "gx_rageval")
+    with st.expander("Per-query results"):
+        st.dataframe(pd.DataFrame(ev["rows"]), width="stretch", hide_index=True)
+
+
+def analytics() -> None:
+    C.hero("Analytics & Evaluation",
+           "Retrieval quality, model behaviour, detection mix, and fair-treatment outcomes.")
+
+    _rag_evaluation_section()
+    st.divider()
+
+    df = _evidence_df()
+    if df.empty:
+        st.info("No conversation data yet — seed conversations on the Settings page.")
+        return
+
+    st.subheader("Portfolio behaviour")
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("**Detection source (Claude vs heuristic)**")
-        st.bar_chart(df["detection_source"].value_counts().rename_axis("source").to_frame("count"))
+        st.markdown("**Detections by driver**")
+        _plot(CH.driver_bar(_driver_counts(df)), "gx_an_driver")
     with c2:
-        st.markdown("**Approval outcomes**")
-        st.bar_chart(df["approval_status"].value_counts().rename_axis("status").to_frame("count"))
+        st.markdown("**Handler outcomes**")
+        _plot(CH.outcome_bar(df["approval_status"].value_counts().to_dict()), "gx_an_outcome")
 
-    st.markdown("**Detections by driver**")
-    st.bar_chart(pd.DataFrame({"count": _driver_counts(df)}))
-
-    st.markdown("**Model confidence distribution**")
-    conf = df[df["model_confidence"] > 0]["model_confidence"]
-    if not conf.empty:
-        st.bar_chart(conf.value_counts(bins=5).sort_index().rename_axis("confidence").to_frame("count"))
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("**Detection source**")
+        st.bar_chart(df["detection_source"].value_counts().rename_axis("source").to_frame("count"))
+    with c4:
+        st.markdown("**Model confidence distribution**")
+        conf = df[df["model_confidence"] > 0]["model_confidence"]
+        if not conf.empty:
+            st.bar_chart(conf.value_counts(bins=5).sort_index().rename_axis("confidence").to_frame("count"))
+        else:
+            st.caption("No model-scored recommendations yet (heuristic mode).")
 
     flagged = int(df["triggered_drivers"].apply(lambda x: bool(x)).sum())
     grounded = int(df[df["citations"].apply(lambda x: bool(x))].shape[0])
     st.markdown(
         f"**Coverage:** {flagged}/{len(df)} turns flagged · "
         f"{grounded} recommendations grounded in policy · "
-        f"acceptance rate "
-        f"{(df['approval_status'].eq('approved').sum() / max((df['approval_status'].isin(['approved','rejected'])).sum(),1) * 100):.0f}%"
+        f"guidance acceptance {_acceptance_rate(df)*100:.0f}%"
     )
     st.download_button("Full evidence (CSV)", df.to_csv(index=False),
                        file_name="analytics_evidence.csv", mime="text/csv")
