@@ -27,6 +27,7 @@ from guardiancx.ui import views  # noqa: E402
 
 st.set_page_config(page_title="GuardianCX", page_icon="🛡️", layout="wide")
 C.inject_css()
+C.sidebar_brand()
 
 
 @st.cache_resource
@@ -44,18 +45,23 @@ def bootstrap() -> dict:
 
 bootstrap()
 
-PAGES = [
-    st.Page(views.exec_dashboard, title="Executive Dashboard", icon="📊", default=True),
-    st.Page(views.live_monitor, title="Live Conversation Monitor", icon="🎧"),
-    st.Page(views.detection, title="Vulnerability Detection", icon="🧭"),
-    st.Page(views.guidance_panel, title="AI Guidance Panel", icon="💬"),
-    st.Page(views.approval_queue, title="Human Approval Queue", icon="🧑‍⚖️"),
-    st.Page(views.policy_kb, title="Policy Knowledge Base", icon="📚"),
-    st.Page(views.guardrails_dashboard, title="Guardrails Dashboard", icon="🛡️"),
-    st.Page(views.audit_trail, title="Audit Trail", icon="🔏"),
-    st.Page(views.customer_timeline_page, title="Customer Timeline", icon="👤"),
-    st.Page(views.analytics, title="Analytics & Evaluation", icon="📈"),
-    st.Page(views.settings_page, title="Settings", icon="⚙️"),
+OVERSIGHT = [
+    st.Page(views.exec_dashboard, title="Executive Dashboard", icon=":material/dashboard:", default=True),
+    st.Page(views.live_monitor, title="Live Conversation Monitor", icon=":material/support_agent:"),
+    st.Page(views.analytics, title="Analytics & Evaluation", icon=":material/analytics:"),
+]
+OPERATIONS = [
+    st.Page(views.detection, title="Vulnerability Detection", icon=":material/psychology:"),
+    st.Page(views.guidance_panel, title="AI Guidance Panel", icon=":material/lightbulb:"),
+    st.Page(views.approval_queue, title="Human Approval Queue", icon=":material/how_to_reg:"),
+    st.Page(views.customer_timeline_page, title="Customer Timeline", icon=":material/person:"),
+]
+GOVERNANCE = [
+    st.Page(views.policy_kb, title="Policy Knowledge Base", icon=":material/menu_book:"),
+    st.Page(views.guardrails_dashboard, title="Guardrails", icon=":material/verified_user:"),
+    st.Page(views.audit_trail, title="Audit Trail", icon=":material/history:"),
+    st.Page(views.settings_page, title="Settings", icon=":material/settings:"),
 ]
 
-st.navigation(PAGES).run()
+st.navigation({"Oversight": OVERSIGHT, "Operations": OPERATIONS, "Governance": GOVERNANCE}).run()
+C.footer()

@@ -1,147 +1,128 @@
-# Vulnerable Customer Care Agent (VCA)
+# 🛡️ GuardianCX
 
-An **advisory-only** agent that monitors regulated banking/insurance service
-conversations for **vulnerability indicators** and helps handlers deliver — and
-the firm evidence — consistent, fair treatment of vulnerable customers.
+**Agentic Customer Experience for regulated financial-services conversations.**
 
-> Regulators require firms to identify customers in vulnerable circumstances
-> (bereavement, serious illness, financial distress, cognitive difficulty) and
-> adapt service accordingly. Today this depends on individual agents noticing a
-> cue and remembering to flag it — inconsistent and largely unevidenced. VCA
-> makes detection signal-based, surfaces the firm's prescribed adaptation, and
-> writes an immutable evidence trail so fair treatment is demonstrable at
-> portfolio level.
+GuardianCX detects and assists **vulnerable customers** in banking/insurance
+service conversations. A LangGraph multi-agent pipeline classifies vulnerability
+across the four FCA drivers, retrieves the firm's prescribed adaptation via RAG,
+enforces a full guardrail stack, requires human approval for high-risk guidance,
+and writes an **immutable, hash-chained evidence trail** — all surfaced through
+an enterprise multi-page Streamlit console and a FastAPI backend.
 
-## What it does
+> Every external integration is **optional**. Unset services fall back to safe
+> local implementations, so `streamlit run app.py` works out of the box and each
+> integration lights up (🟢) the moment you configure it. See the **Settings**
+> page for live status of every component.
 
-1. **Ingests** a live conversation (real Azure Speech transcription, or a
-   simulated transcript/chat feed as fallback).
-2. **Detects** vulnerability indicators across the four regulator-defined
-   drivers — **health, life events, resilience, capability** — with a
-   fine-tuned transformer classifier. Detection is *signal-based and always
-   advisory; it never takes automated action.*
-3. **Retrieves** the firm's prescribed **adaptation** for each detected
-   indicator via RAG over the internal vulnerability policy (e.g. *slow the
-   pace, offer a trusted third party, suspend collections activity*).
-4. **Surfaces** a discreet, advisory prompt to the handler.
-5. **Records** every detection, the adaptation offered, the handler action and
-   the outcome to an **append-only, hash-chained evidence log**.
-6. **Reports** at portfolio level so the firm can demonstrate consistent
-   treatment of an otherwise-invisible supervisory population.
+---
 
-## MVP handler console
+## Tech stack
 
-The Streamlit app (`app/streamlit_app.py`) is a working handler console:
+| Layer | Technology | Fallback when unconfigured |
+|-------|-----------|----------------------------|
+| Frontend | **Streamlit** (multipage) | — |
+| Backend API | **FastAPI** | — |
+| LLM | **Claude** (`claude-opus-4-8`, structured JSON) | keyword heuristic |
+| Agent framework | **LangGraph** `StateGraph` | sequential runner |
+| Embeddings | **Azure OpenAI** | deterministic hashing embedder |
+| Speech | **Azure Speech** | text input |
+| Database | **PostgreSQL** | local SQLite |
+| Vector DB | **ChromaDB** (persistent) | in-memory cosine store |
+| Observability | **Langfuse** | in-memory event buffer |
+| Logging | **MLflow / OpenTelemetry** | Python logging |
+| Guardrails | **NeMo Guardrails / custom validators** | custom validators (default) |
 
-- **Four input modes** — type a turn, **speak live via Azure Speech**, replay a
-  sample conversation, or **upload a transcript** (JSON / CSV / TXT).
-- **Transparent agent trace** — every customer turn shows the agent's loop:
-  perceive → assess (per-driver confidence bars) → retrieve (policy clause +
-  score) → advise → decide → record.
-- **Human-in-the-loop** — the handler **Accepts / Modifies / Dismisses** each
-  advisory; only then is an evidence record written.
-- **Evidence & report tab** — portfolio metrics, detections-by-driver and
-  outcomes charts, the hash-chained evidence table, and live chain verification.
+## The 11 pages
 
-This capstone deliberately showcases the Agentic CX training skills — see
-[docs/AGENTIC_SKILLS.md](docs/AGENTIC_SKILLS.md) for the full mapping.
+Executive Dashboard · Live Conversation Monitor · Vulnerability Detection ·
+AI Guidance Panel · Human Approval Queue · Policy Knowledge Base (RAG search) ·
+Guardrails Dashboard · Audit Trail · Customer Timeline · Analytics & Evaluation ·
+Settings.
 
 ## Architecture
 
 ```
-                 ┌──────────────────────────────────────────────┐
-                 │            Streamlit / FastAPI UI            │
-                 │  live transcript · advisory prompts · report │
-                 └───────────────▲───────────────▲──────────────┘
-                                 │               │
-   audio / text                 │ guidance      │ metrics
-   ┌──────────┐   Utterance  ┌──┴───────┐   ┌───┴────────┐
-   │Ingestion │─────────────▶│ Pipeline │──▶│ Reporting  │
-   │ Azure /  │              └──┬────┬───┘   └────────────┘
-   │simulated │     Detection   │    │  Guidance + Outcome
-   └──────────┘   ┌─────────────▼┐  ┌▼──────────────┐  ┌──────────────┐
-                  │  Classifier  │  │  RAG policy    │  │  Evidence    │
-                  │ (DistilBERT, │  │  retriever     │  │  store       │
-                  │  4 drivers)  │  │ (FAISS+MiniLM) │  │ append-only  │
-                  └──────────────┘  └────────────────┘  └──────────────┘
+                         ┌──────────── Streamlit console (11 pages) ───────────┐
+                         │  FastAPI  ──────────────── same pipeline ───────────┘
+                         ▼
+   utterance ──▶ ┌─────────────────── LangGraph pipeline ────────────────────┐
+                 │ Conversation → Vulnerability → Policy(RAG) → Guidance →    │
+                 │ Compliance → Supervisor → Evidence                         │
+                 └───┬──────────┬───────────┬───────────┬──────────┬─────────┘
+        input guardrails    Claude      ChromaDB     Claude    output guardrails
+        (PII/injection/     (drivers)   (policy)     (advice)  (confidence/
+         toxicity)                                              hallucination/
+                                                                approval)
+                                     │
+                                     ▼
+                    Immutable hash-chained evidence  ──▶  PostgreSQL / SQLite
+                    Audit log · Observability (Langfuse/MLflow)
 ```
 
-Detection → guidance → handler action are all written to the immutable evidence
-log, which feeds portfolio-level reporting.
+**Agents** (`src/guardiancx/agents/`)
 
-## Project layout
+1. **Conversation** — ingests the turn, runs input guardrails, masks PII.
+2. **Vulnerability Detection** — Claude (structured JSON) or heuristic; 4 drivers.
+3. **Policy Retrieval** — RAG over ChromaDB, scoped per triggered driver.
+4. **Guidance** — Claude drafts adaptation grounded strictly in retrieved policy.
+5. **Compliance** — runs output guardrails on the recommendation.
+6. **Supervisor** — sets risk, routes high-risk/blocked cases to human approval.
+7. **Evidence Logger** — writes the immutable, hash-chained record + audit event.
 
-```
-src/vca/
-  config.py        # YAML + env config
-  schemas.py       # shared pydantic models (Utterance, Detection, Guidance, ...)
-  ingestion/       # Azure Speech + simulated streaming sources
-  classifier/      # fine-tuned multi-label driver classifier (train + infer)
-  rag/             # policy indexing + adaptation retrieval
-  guidance/        # builds the advisory prompt
-  evidence/        # append-only hash-chained evidence store
-  reporting/       # portfolio-level fair-treatment metrics
-  pipeline.py      # wires the stages together
-app/               # streamlit_app.py, api.py
-data/              # synthetic transcripts, labeled data, firm policy
-scripts/           # train_classifier, build_index, run_demo, generate_data
-tests/
-```
+**Guardrails** (`src/guardiancx/guardrails/`): `pii`, `injection`, `toxicity`
+(input); `confidence`, `hallucination`, `approval` (output).
 
 ## Quickstart
 
 ```bash
-python -m venv .venv && .venv/Scripts/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+python -m venv .venv && .venv\Scripts\Activate.ps1     # Windows PowerShell
+python -m pip install -r requirements.txt
 
-# 1. Generate synthetic data + mock policy (if not already present)
-python scripts/generate_data.py
+cp .env.example .env        # optional — fill in any keys you have
 
-# 2. Fine-tune the driver classifier
-python scripts/train_classifier.py
-
-# 3. Build the policy RAG index
-python scripts/build_index.py
-
-# 4a. Run the end-to-end CLI demo over a sample conversation
-python scripts/run_demo.py
-
-# 4b. Or launch the web UI
-streamlit run app/streamlit_app.py
+python scripts/seed_data.py --fresh   # index policy + run synthetic conversations
+streamlit run app.py                  # open http://localhost:8501
 ```
 
-Real Azure Speech is used when `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` are set
-in `.env` (copy `.env.example`). Otherwise transcription falls back to the
-simulated source. Set `VCA_FORCE_SIMULATED=1` to always use the fallback.
+Optional FastAPI backend:
 
-## Deploying to Streamlit Community Cloud
+```bash
+uvicorn api:app --reload    # http://localhost:8000/docs
+```
 
-The app is deploy-ready. Streamlit Cloud has a ~1 GB memory limit, so the root
-`requirements.txt` is a **lightweight set** — the app runs fully on its built-in
-fallbacks (keyword classifier + TF-IDF retriever) with no torch/transformers.
-For the fine-tuned transformer + semantic RAG + Azure Speech, install
-`requirements-full.txt` locally instead.
+> Use `python -m pip` on this machine (bare `pip` points at a different Python).
 
-Steps:
+## Configuration
 
-1. Push the repo to GitHub (already has an `origin` remote).
-2. Go to <https://share.streamlit.io> and sign in with GitHub.
-3. **New app** → pick this repo and branch, set **Main file path** to
-   `app/streamlit_app.py`.
-4. In *Advanced settings*, select Python 3.11–3.13. Deploy.
+All via environment variables / `.env` (see `.env.example`). Highlights:
 
-No secrets are required for the demo (transcription runs in simulated mode). To
-enable real Azure Speech in a deployment, add `AZURE_SPEECH_KEY` /
-`AZURE_SPEECH_REGION` under the app's *Secrets* and switch to
-`requirements-full.txt`.
+- `ANTHROPIC_API_KEY` — enables Claude for detection + guidance.
+- `AZURE_OPENAI_*` — enables Azure OpenAI embeddings for RAG.
+- `GUARDIANCX_DATABASE_URL` — Postgres URL (else SQLite file).
+- `GUARDIANCX_CONFIDENCE_THRESHOLD`, `GUARDIANCX_HIGH_RISK_APPROVAL` — guardrail tuning.
 
-## Compliance & design notes
+## Extending
 
-- **Advisory only.** The system never suspends collections, opens a case, or
-  takes any customer-facing action. It surfaces guidance; a human decides.
-- **Auditable.** The evidence log is append-only and hash-chained: each record
-  embeds the previous record's hash, so tampering is detectable.
-- **Evidenced fair treatment.** Portfolio reporting turns a judgement-dependent
-  process into a demonstrable one.
+- **Add a guardrail** — subclass `guardrails.base.Guardrail`, implement `check`,
+  and register it in `guardrails/manager.py` (`default_input_guardrails` /
+  `default_output_guardrails`). Nothing else changes.
+- **Add an agent** — write a `run(state) -> state` node in `agents/`, then add it
+  to `PIPELINE` in `agents/graph.py`; it slots into the LangGraph automatically.
+- **Add policy** — drop a markdown file in `data/policies/` and click *Re-ingest
+  policies* on the Settings page (or run the seed script).
 
-See [docs/](docs/) for the full design and compliance write-up.
+## Compliance posture
+
+- **Advisory only** — the system recommends; a human decides. It never acts.
+- **Grounded** — guidance must cite retrieved policy; ungrounded citations are
+  blocked by the hallucination guardrail.
+- **Human-in-the-loop** — high-risk guidance is gated behind explicit approval.
+- **Tamper-evident** — evidence is append-only and hash-chained; the Audit Trail
+  verifies the chain live.
+- **All data is synthetic.**
+
+## Tests
+
+```bash
+python -m pytest -q      # guardrails + end-to-end pipeline
+```

@@ -25,6 +25,7 @@ from ..rag.vector_store import ensure_ingested, get_vector_store
 from ..services.claude_client import get_claude
 from ..services.embeddings import get_embedder
 from ..services.observability import get_observability
+from ..services.speech import get_speech
 from ..services.synthetic_data import list_conversations
 from ..utils.types import Driver, PolicyChunk, Recommendation, RiskLevel
 from . import components as C
@@ -68,7 +69,7 @@ def exec_dashboard() -> None:
     with c2: C.metric_card("Vulnerability signals", flagged)
     with c3: C.metric_card("High-risk cases", high)
     with c4: C.metric_card("Pending approvals", pending)
-    with c5: C.metric_card("Evidence chain", "✅ Valid" if ok else "❌ Broken")
+    with c5: C.metric_card("Evidence chain", "Verified" if ok else "At risk")
 
     st.divider()
     a, b = st.columns(2)
@@ -98,42 +99,126 @@ def exec_dashboard() -> None:
 def _download_report(df: pd.DataFrame, name: str) -> None:
     if df.empty:
         return
-    st.download_button("⬇️ Download evidence (CSV)", df.to_csv(index=False),
+    st.download_button("Download evidence (CSV)", df.to_csv(index=False),
                        file_name=f"{name}.csv", mime="text/csv")
 
 
 # --------------------------------------------------------------------------- #
 # 2. Live Conversation Monitor
 # --------------------------------------------------------------------------- #
+def _render_turn(turn: dict, state: dict) -> None:
+    role = "user" if turn["speaker"] == "customer" else "assistant"
+    with st.chat_message(role, avatar="C" if role == "user" else "A"):
+        st.markdown(f"**{turn['speaker'].title()}:** {turn['text']}")
+        decision = state.get("decision")
+        if turn["speaker"] != "customer" or decision is None:
+            return
+        assessed = decision.assessment.triggered
+        label = "Agent decision trace" + (" — vulnerability signal detected" if assessed
+                                          else " — no signal")
+        with st.expander(label, expanded=bool(assessed)):
+            C.agent_trace(state.get("trace", []))
+            st.markdown("**Guardrails applied**")
+            C.guardrail_badges([r.model_dump() for r in decision.guardrails.results])
+        if decision.recommendation:
+            _render_recommendation(decision)
+
+
 def live_monitor() -> None:
     C.hero("Live Conversation Monitor",
-           "Stream a conversation through the multi-agent pipeline and watch every decision.")
+           "Stream a conversation through the multi-agent pipeline and review every decision.")
+    mode = st.radio("Mode", ["Live session", "Saved conversation"], horizontal=True,
+                    label_visibility="collapsed")
+    if mode == "Saved conversation":
+        _live_saved()
+    else:
+        _live_session()
+
+
+def _live_saved() -> None:
     convs = {f"{c['conversation_id']} — {c['customer_name']}": c for c in list_conversations()}
     choice = st.selectbox("Conversation", list(convs))
     conv = convs[choice]
     st.caption(f"Product: {conv['product']} · Channel: {conv['channel']} · "
                f"Customer: {conv['customer_id']}")
-
-    if st.button("▶️ Run through GuardianCX", type="primary"):
+    if st.button("Run through GuardianCX", type="primary"):
         with st.spinner("Agents working…"):
             st.session_state["monitor_states"] = process_conversation(conv)
+            st.session_state["monitor_conv"] = conv["conversation_id"]
+    if st.session_state.get("monitor_conv") == conv["conversation_id"]:
+        for turn, state in zip(conv["turns"], st.session_state.get("monitor_states", [])):
+            _render_turn(turn, state)
 
-    states = st.session_state.get("monitor_states", [])
-    for turn, state in zip(conv["turns"], states):
-        role = "user" if turn["speaker"] == "customer" else "assistant"
-        with st.chat_message(role, avatar="🧑" if role == "user" else "🎧"):
-            st.markdown(f"**{turn['speaker'].title()}:** {turn['text']}")
-            decision = state.get("decision")
-            if turn["speaker"] != "customer" or decision is None:
-                continue
-            assessed = decision.assessment.triggered
-            with st.expander("🔎 Agent trace" + (" · 🚩 signal" if assessed else ""),
-                             expanded=bool(assessed)):
-                C.agent_trace(state.get("trace", []))
-                st.markdown("**Guardrails**")
-                C.guardrail_badges([r.model_dump() for r in decision.guardrails.results])
-            if decision.recommendation:
-                _render_recommendation(decision)
+
+def _live_session() -> None:
+    """A real, sessionful conversation: type or speak turns and watch the agent
+    respond in real time. Each customer turn runs through the full pipeline and
+    is written to the evidence store, so it also appears in the dashboards."""
+    ss = st.session_state
+    ss.setdefault("live_turns", [])
+    ss.setdefault("live_states", [])
+    ss.setdefault("live_conv_id", "LIVE-0001")
+    ss.setdefault("live_customer_id", "CUST-LIVE")
+
+    with st.expander("Session details", expanded=not ss["live_turns"]):
+        c1, c2 = st.columns(2)
+        ss["live_conv_id"] = c1.text_input("Conversation ID", ss["live_conv_id"])
+        ss["live_customer_id"] = c2.text_input("Customer ID", ss["live_customer_id"])
+
+    speech = get_speech()
+    sp_status = speech.status()
+
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c1:
+        speaker = st.selectbox("Speaker", ["customer", "agent"], label_visibility="collapsed")
+    # Text entry
+    with st.form("live_turn", clear_on_submit=True):
+        text = st.text_input("Turn", placeholder="Type what was said, then press Add…",
+                             label_visibility="collapsed")
+        submitted = st.form_submit_button("Add turn", type="primary")
+    if submitted and text.strip():
+        _append_live_turn(speaker, text.strip())
+        st.rerun()
+
+    # Microphone (Azure Speech)
+    m1, m2 = st.columns([1, 3])
+    if m1.button("Use microphone (customer)", disabled=not sp_status["available"]):
+        try:
+            with st.spinner("Listening…"):
+                spoken = speech.recognize_once()
+            if spoken:
+                _append_live_turn("customer", spoken)
+                st.rerun()
+            else:
+                st.warning("No speech was recognised.")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Azure Speech error: {exc}")
+    with m2:
+        if sp_status["available"]:
+            st.caption(f"Azure Speech ready · region `{sp_status['region']}` · "
+                       "microphone capture runs on the machine hosting the app.")
+        else:
+            st.caption(f"Microphone disabled — {sp_status['reason']}")
+
+    b1, b2 = st.columns([1, 5])
+    if b1.button("New session"):
+        ss["live_turns"] = []
+        ss["live_states"] = []
+        st.rerun()
+
+    st.divider()
+    if not ss["live_turns"]:
+        st.info("Add a turn or use the microphone to begin the conversation.")
+    for turn, state in zip(ss["live_turns"], ss["live_states"]):
+        _render_turn(turn, state)
+
+
+def _append_live_turn(speaker: str, text: str) -> None:
+    ss = st.session_state
+    idx = len(ss["live_turns"])
+    state = process_turn(ss["live_conv_id"], ss["live_customer_id"], idx, speaker, text)
+    ss["live_turns"].append({"speaker": speaker, "text": text})
+    ss["live_states"].append(state)
 
 
 def _render_recommendation(decision) -> None:
@@ -170,7 +255,7 @@ def detection() -> None:
         scores = {s.driver.value: s.score for s in a.signals}
         st.bar_chart(pd.DataFrame({"score": scores}))
         for s in a.signals:
-            flag = "🚩" if s.score >= 0.5 else "·"
+            flag = "●" if s.score >= 0.5 else "○"
             st.markdown(f"{flag} **{s.driver.value}** — {s.score:.2f} "
                         f"<span style='opacity:.6'>{s.evidence}</span>", unsafe_allow_html=True)
 
@@ -213,7 +298,7 @@ def approval_queue() -> None:
            "High-risk or guardrail-flagged recommendations awaiting human sign-off.")
     pending = list_pending()
     if not pending:
-        st.success("No items awaiting approval. 🎉")
+        st.success("No items are currently awaiting approval.")
         return
     reviewer = st.text_input("Reviewer name", "supervisor")
     for rec in pending:
@@ -228,10 +313,10 @@ def approval_queue() -> None:
                        f"confidence {rec['model_confidence']:.2f}")
             note = st.text_input("Decision note", key=f"note_{rec['record_id']}")
             c1, c2, _ = st.columns([1, 1, 4])
-            if c1.button("✅ Approve", key=f"ap_{rec['record_id']}"):
+            if c1.button("Approve", key=f"ap_{rec['record_id']}"):
                 update_approval(rec["record_id"], "approved", reviewer, note)
                 st.rerun()
-            if c2.button("🚫 Reject", key=f"rj_{rec['record_id']}"):
+            if c2.button("Reject", key=f"rj_{rec['record_id']}"):
                 update_approval(rec["record_id"], "rejected", reviewer, note)
                 st.rerun()
 
@@ -310,7 +395,7 @@ def audit_trail() -> None:
         show["record_hash"] = show["record_hash"].str.slice(0, 12) + "…"
         show["prev_hash"] = show["prev_hash"].str.slice(0, 12) + "…"
         st.dataframe(show, width="stretch")
-        st.download_button("⬇️ Evidence (JSON)", json.dumps(list_evidence(), indent=2),
+        st.download_button("Evidence (JSON)", json.dumps(list_evidence(), indent=2),
                            file_name="evidence_log.json", mime="application/json")
     st.markdown("**Audit events**")
     audit = list_audit()
@@ -377,7 +462,7 @@ def analytics() -> None:
         f"acceptance rate "
         f"{(df['approval_status'].eq('approved').sum() / max((df['approval_status'].isin(['approved','rejected'])).sum(),1) * 100):.0f}%"
     )
-    st.download_button("⬇️ Full evidence (CSV)", df.to_csv(index=False),
+    st.download_button("Full evidence (CSV)", df.to_csv(index=False),
                        file_name="analytics_evidence.csv", mime="text/csv")
 
 
@@ -407,17 +492,17 @@ def settings_page() -> None:
 
     st.markdown("**Data controls**")
     c1, c2, c3 = st.columns(3)
-    if c1.button("🌱 Seed / re-run conversations"):
+    if c1.button("Seed / re-run conversations"):
         for conv in list_conversations():
             process_conversation(conv)
         st.success("Seeded.")
         st.rerun()
-    if c2.button("📚 Re-ingest policies"):
+    if c2.button("Re-ingest policies"):
         from config.settings import POLICY_DIR
 
         n = get_vector_store().ingest_dir(POLICY_DIR)
         st.success(f"Ingested {n} chunks.")
-    if c3.button("🗑️ Clear all evidence"):
+    if c3.button("Clear all evidence"):
         from ..database.repository import clear_all
         clear_all()
         st.rerun()
