@@ -2,11 +2,19 @@
 
 Wires the stages together:
 
-    ingestion -> classifier -> RAG guidance -> (handler) -> evidence store
+    ingestion -> classifier -> RAG guidance -> (handler decision) -> evidence
 
-Only customer utterances are classified. When a driver triggers, guidance is
-produced and an evidence record is written. The handler's outcome can be
-supplied via a callback (UI / CLI) or defaults to NO_RESPONSE.
+Two granularities are supported:
+
+* ``assess(utterance)`` — advisory only: classify + retrieve guidance, WITHOUT
+  writing evidence. This is the perceive→assess→advise part of the agent loop
+  and is used for interactive / live turns where the handler decides next.
+* ``record_outcome(...)`` — commit the detection, guidance and the handler's
+  outcome to the immutable evidence log (the "record" step).
+* ``process(source, on_guidance)`` — batch convenience that assesses every
+  utterance and records with an outcome callback.
+
+Only customer utterances are assessed for vulnerability signals.
 """
 from __future__ import annotations
 
@@ -22,7 +30,7 @@ from .guidance.advisor import HandlerAdvisor
 from .ingestion.base import TranscriptionSource
 from .ingestion.factory import make_source
 from .rag.retriever import BaseRetriever, load_retriever
-from .schemas import EvidenceRecord, Guidance, Outcome, Speaker, Utterance
+from .schemas import Detection, EvidenceRecord, Guidance, Outcome, Speaker, Utterance
 
 # Called when guidance is produced; returns the handler's outcome.
 OutcomeCallback = Callable[[Guidance], Outcome]
@@ -33,8 +41,18 @@ class PipelineEvent:
     """One step of the conversation as seen by the pipeline."""
 
     utterance: Utterance
+    detection: Detection | None = None
     guidance: Guidance | None = None
     record: EvidenceRecord | None = None
+
+    @property
+    def assessed(self) -> bool:
+        """True if this (customer) utterance was run through the classifier."""
+        return self.detection is not None
+
+    @property
+    def flagged(self) -> bool:
+        return self.guidance is not None
 
 
 class VCAPipeline:
@@ -61,30 +79,45 @@ class VCAPipeline:
         evidence = EvidenceStore(cfg.path(cfg.evidence["path"]))
         return cls(classifier, advisor, evidence)
 
+    # --- single-turn (interactive / live) --------------------------------
+    def assess(self, utterance: Utterance) -> PipelineEvent:
+        """Advisory assessment of one utterance. Writes no evidence.
+
+        Handler utterances pass through unassessed. Customer utterances are
+        classified; if any driver triggers, guidance is attached.
+        """
+        if utterance.speaker != Speaker.CUSTOMER:
+            return PipelineEvent(utterance=utterance)
+
+        detection = self.classifier.detect(
+            utterance.conversation_id, utterance.turn_index, utterance.text
+        )
+        guidance = self.advisor.advise(detection) if detection.any_triggered else None
+        return PipelineEvent(utterance=utterance, detection=detection, guidance=guidance)
+
+    def record_outcome(
+        self, detection: Detection, guidance: Guidance, outcome: Outcome
+    ) -> EvidenceRecord:
+        """Commit a detection + guidance + handler outcome to the evidence log."""
+        return self.evidence.append(detection, guidance, outcome)
+
+    # --- batch -----------------------------------------------------------
     def process(
         self,
         source: TranscriptionSource,
         on_guidance: OutcomeCallback | None = None,
     ) -> Iterator[PipelineEvent]:
-        """Run the pipeline over a source, yielding an event per utterance."""
+        """Run the pipeline over a source, yielding an event per utterance.
+
+        When an utterance is flagged, an evidence record is written using the
+        outcome from ``on_guidance`` (or a default NO_RESPONSE outcome).
+        """
         for utt in source.stream():
-            # Only the customer's words are assessed for vulnerability signals.
-            if utt.speaker != Speaker.CUSTOMER:
-                yield PipelineEvent(utterance=utt)
-                continue
-
-            detection = self.classifier.detect(
-                utt.conversation_id, utt.turn_index, utt.text
-            )
-            if not detection.any_triggered:
-                yield PipelineEvent(utterance=utt)
-                continue
-
-            guidance = self.advisor.advise(detection)
-            assert guidance is not None  # any_triggered guarantees guidance
-            outcome = on_guidance(guidance) if on_guidance else Outcome()
-            record = self.evidence.append(detection, guidance, outcome)
-            yield PipelineEvent(utterance=utt, guidance=guidance, record=record)
+            event = self.assess(utt)
+            if event.guidance is not None:
+                outcome = on_guidance(event.guidance) if on_guidance else Outcome()
+                event.record = self.record_outcome(event.detection, event.guidance, outcome)
+            yield event
 
     def process_transcript(
         self,

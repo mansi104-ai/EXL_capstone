@@ -59,8 +59,14 @@ audio / chat ──▶ Ingestion ──▶ Classifier ──▶ Guidance (RAG) �
   chain.
 - **Reporting** (`vca/reporting`) — portfolio-level fair-treatment metrics over
   the evidence log, plus chain verification.
-- **Pipeline** (`vca/pipeline.py`) — wires the stages; only customer utterances
-  are assessed; the handler outcome is captured via a callback.
+- **Pipeline** (`vca/pipeline.py`) — wires the stages. `assess()` does advisory
+  classification + retrieval without writing evidence; `record_outcome()` commits
+  detection + guidance + the handler's decision. Only customer utterances are
+  assessed.
+- **Agent** (`vca/agent.py`) — `CareAgent` orchestrates each customer turn as a
+  transparent 6-step loop (perceive → assess → retrieve → advise → decide →
+  record) and emits a `TurnTrace` the UI renders. See
+  [AGENTIC_SKILLS.md](AGENTIC_SKILLS.md) for the full skills mapping.
 
 ## 4. Compliance-critical design decisions
 

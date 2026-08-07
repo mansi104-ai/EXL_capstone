@@ -15,8 +15,45 @@ from .base import TranscriptionSource
 from .simulated import SimulatedSource
 
 
+def azure_sdk_installed() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("azure.cognitiveservices.speech") is not None
+
+
 def azure_available(cfg: Config) -> bool:
     return bool(cfg.azure_speech_key and cfg.azure_speech_region) and not cfg.force_simulated
+
+
+def azure_status(cfg: Config | None = None) -> dict:
+    """Transparent breakdown of whether live Azure Speech can be used."""
+    cfg = cfg or load_config()
+    sdk = azure_sdk_installed()
+    key = bool(cfg.azure_speech_key)
+    region = bool(cfg.azure_speech_region)
+    forced = cfg.force_simulated
+    available = sdk and key and region and not forced
+
+    if available:
+        reason = "Live Azure Speech ready."
+    elif not sdk:
+        reason = "Azure Speech SDK not installed (pip install -r requirements-full.txt)."
+    elif not (key and region):
+        reason = "AZURE_SPEECH_KEY / AZURE_SPEECH_REGION not set in .env."
+    elif forced:
+        reason = "VCA_FORCE_SIMULATED is set — unset it to enable live Azure."
+    else:  # pragma: no cover
+        reason = "Live Azure Speech unavailable."
+
+    return {
+        "available": available,
+        "sdk_installed": sdk,
+        "key_present": key,
+        "region_present": region,
+        "forced_simulated": forced,
+        "region": cfg.azure_speech_region or "",
+        "reason": reason,
+    }
 
 
 def make_source(

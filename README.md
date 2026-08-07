@@ -29,6 +29,23 @@ the firm evidence — consistent, fair treatment of vulnerable customers.
 6. **Reports** at portfolio level so the firm can demonstrate consistent
    treatment of an otherwise-invisible supervisory population.
 
+## MVP handler console
+
+The Streamlit app (`app/streamlit_app.py`) is a working handler console:
+
+- **Four input modes** — type a turn, **speak live via Azure Speech**, replay a
+  sample conversation, or **upload a transcript** (JSON / CSV / TXT).
+- **Transparent agent trace** — every customer turn shows the agent's loop:
+  perceive → assess (per-driver confidence bars) → retrieve (policy clause +
+  score) → advise → decide → record.
+- **Human-in-the-loop** — the handler **Accepts / Modifies / Dismisses** each
+  advisory; only then is an evidence record written.
+- **Evidence & report tab** — portfolio metrics, detections-by-driver and
+  outcomes charts, the hash-chained evidence table, and live chain verification.
+
+This capstone deliberately showcases the Agentic CX training skills — see
+[docs/AGENTIC_SKILLS.md](docs/AGENTIC_SKILLS.md) for the full mapping.
+
 ## Architecture
 
 ```
