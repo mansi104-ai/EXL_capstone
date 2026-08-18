@@ -1,6 +1,6 @@
 # Phase 5 — Finance niche & the real call
 
-> **Status: complete.** 76 tests passing · RAG hit-rate@3 100% · MRR 0.95 ·
+> **Status: complete.** 103 tests passing · RAG hit-rate@3 100% · MRR 0.95 ·
 > no new third-party dependency.
 
 Final submission phase. Two goals, held together:
@@ -54,9 +54,17 @@ loop, and evidences fair treatment.
 
 | | Task | Delivered |
 |---|------|-----------|
-| 4.1 | Tests | 76 passing: `test_voice.py` (32), `test_finance.py` (26), `test_live_monitor.py` (6 headless render tests), plus the existing suite |
+| 4.1 | Tests | 103 passing: `test_voice.py` (32), `test_reply.py` (27), `test_finance.py` (26), `test_live_monitor.py` (6 headless render tests), plus the existing suite |
 | 4.2 | Evaluation | harness scores the set with **and without** journey re-ranking, so the finance layer's contribution is measured; labels are sets where several clauses are genuinely correct |
 | 4.3 | Docs | `OVERVIEW.md` and `README.md` rewritten to the niche and the nine-agent graph |
+
+## Track 5 — Saying it so the customer understands
+
+| | Task | Delivered |
+|---|------|-----------|
+| 5.1 | **Customer-facing reply composer** | `agents/reply.py` — approved `Offer:` wording authored per clause and used verbatim; derivation as the fallback; openers led by situation not driver score; at most two offers, then hand the turn back |
+| 5.2 | **Clarity guardrail** (8th) | flags policy voice, jargon and rulebook codes, empty offers, and sentences too long to follow when spoken — the only guardrail protecting the customer rather than the firm |
+| 5.3 | Distress as a retrieval trigger | a crisis disclosure no longer needs to match a keyword to reach the support policy |
 
 ---
 
@@ -80,3 +88,13 @@ Recorded because each was found by a test or an eval run rather than by reading:
   ban on selling into vulnerability, complaint handling, recording duties — were
   excluded by every driver-filtered query. Driver filters now admit them, which
   took hit-rate@3 from 0.969 to 1.000.
+* **The handler was reading staff instructions aloud.** The reply quoted policy
+  verbatim — "reassure the customer they will not need to repeat the bereavement
+  disclosure" — spoken at a widow, and truncated mid-word.
+* **A crisis disclosure was answered with account servicing.** "I feel hopeless,
+  I don't know how I'll carry on" matched no driver keyword and no journey
+  pattern, so nothing was retrieved and the reply was "let me bring up your
+  account". Measured distress is now a retrieval trigger in its own right, and
+  the crisis clause reaches the customer with the Samaritans number.
+* **The plain-English lexicon assumed the deceased was a husband**, and told
+  every bereaved customer so, whoever they had lost.

@@ -86,7 +86,7 @@ Python only, so the two cannot drift.
 | Prosody | standard-library DSP · Web Audio API | text channel |
 | Database | **SQLAlchemy** — Postgres / SQLite, additive migrations | SQLite |
 | Evidence | append-only, **hash-chained** log | — |
-| Guardrails | PII · injection · toxicity · confidence · grounding · **prohibited actions** · human approval | custom validators (NeMo optional) |
+| Guardrails | PII · injection · toxicity · confidence · grounding · **prohibited actions** · human approval · **customer clarity** | custom validators (NeMo optional) |
 | Observability | **Langfuse** · **MLflow / OpenTelemetry** | in-memory buffer |
 | Config | **pydantic-settings** | `.env` / `st.secrets` |
 
@@ -103,11 +103,48 @@ No new third-party dependency was added for any of the live-call work.
 | Output | Hallucination grounding | block | Reject citations not present in retrieved policy |
 | Output | **Prohibited action** | block | Block advice that causes harm however well grounded — credit to a customer disclosing gambling harm, a "safe account" instruction on a scam call, a demand for a payment that would leave essentials unpaid |
 | Output | Human approval | block | Mandatory sign-off for high-risk recommendations |
+| Reply | **Customer clarity** | warn | Flags a draft the customer cannot act on — policy voice, jargon, no concrete offer, sentences too long to follow when spoken |
 
 The prohibited-action check is deterministic and journey-scoped. It excludes
 verbatim policy quotations and negated mentions, so a clause that *forbids* an
 action is not mistaken for one proposing it — the prompt asks, the guardrail
 guarantees.
+
+Clarity is the only guardrail that protects the **customer** rather than the
+firm, and it runs on a third stage of its own: the draft reply, which does not
+exist yet when the output guardrails fire. It is `warn`, not `block` — the reply
+is a draft a handler sends or edits, and a clumsy sentence is better than silence
+on a live call.
+
+## Saying it so the customer understands
+
+Policy is written for handlers — in the imperative, about a third party. Read
+aloud it is unusable:
+
+> *"Express condolences and reassure the customer they will not need to repeat
+> the bereavement disclosure to another team."*
+
+Under the Consumer Duty's consumer understanding outcome (PRIN 2A.5) a firm must
+communicate in a way the customer can act on, and must tailor that where the
+customer is vulnerable. So the reply is composed rather than quoted:
+
+* **Approved wording first.** Each policy clause carries `Offer:` lines — the
+  sentences a handler may actually say, authored beside the clause where a
+  compliance reviewer signs off both. What a vulnerable customer hears is not
+  machine paraphrase.
+* **Derivation as the fallback**, for clauses not yet given wording: imperatives
+  about "the customer" become offers to "you", and industry terms are swapped for
+  the words a customer uses.
+* **Structure, always the same.** Acknowledge, then at most two concrete offers,
+  then a question that hands the turn back. Two offers read as a choice; three
+  read as a menu, and a menu gets nothing accepted.
+* **Openers follow the situation, not the top driver score.** A scam victim who
+  happens to score on capability is not told "I'll go at your pace" — it answers
+  a question they did not ask, at the moment they feel foolish.
+
+The same composer feeds both paths: without an LLM it writes the reply, with one
+it builds the prompt from the same approved wording. Both are checked by the
+clarity guardrail, because a model slips into policy voice too.
 
 ## Retrieval quality — measured, not asserted
 
@@ -131,13 +168,13 @@ label, not the retrieval.
 | | |
 |---|---|
 | LangGraph agents | **9** |
-| Guardrails | **7** |
+| Guardrails | **8** |
 | Console pages | **11** |
 | Policy clauses | **34** |
 | FCA drivers · banking journeys · stress indicators | **4 · 10 · 10** |
 | RAG hit-rate@3 | **100%** |
 | Retrieval MRR | **0.95** |
-| Tests passing | **76** |
+| Tests passing | **103** |
 
 ## How it was built
 

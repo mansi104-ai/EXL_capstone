@@ -78,6 +78,9 @@ class VectorStore:
             {"ref": c.ref, "title": c.title,
              "driver": c.driver.value if c.driver else "",
              "journeys": ",".join(c.journey_values),
+             # Chroma metadata must be scalar, so the approved wordings travel as
+             # one string and are split back out on read.
+             "offers": " || ".join(c.offers),
              "source": c.source}
             for c in chunks
         ]
@@ -101,6 +104,7 @@ class VectorStore:
     @staticmethod
     def _to_chunk(meta: dict, document: str, score: float) -> PolicyChunk:
         raw = meta.get("journeys") or ""
+        offers = meta.get("offers") or ""
         return PolicyChunk(
             policy_reference=meta.get("ref", ""),
             title=meta.get("title", ""),
@@ -108,6 +112,7 @@ class VectorStore:
             text=document,
             score=round(score, 4),
             journeys=[j for j in raw.split(",") if j],
+            offers=[o.strip() for o in offers.split("||") if o.strip()],
         )
 
     def query(self, text: str, driver: Optional[Driver] = None, top_k: int = 3,

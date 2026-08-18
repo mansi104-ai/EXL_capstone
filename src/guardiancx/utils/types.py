@@ -97,6 +97,9 @@ class PolicyChunk(BaseModel):
     score: float = 0.0
     journeys: list[str] = Field(default_factory=list)   # finance journeys the clause covers
     journey_match: bool = False                          # matched this turn's journey
+    # Approved customer-facing wording for this clause. Authored in the policy
+    # document, not derived — what a vulnerable customer hears is signed off.
+    offers: list[str] = Field(default_factory=list)
 
 
 class Recommendation(BaseModel):

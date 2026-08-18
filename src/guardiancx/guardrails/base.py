@@ -27,6 +27,10 @@ class GuardrailContext:
     # The banking journey this turn was classified into. Lets a guardrail apply
     # the rule that belongs to the situation rather than one blanket rule.
     journey: Optional[Journey] = None
+    # The draft reply the customer would actually hear. Distinct from `text`
+    # (what the customer said) and from `recommendation` (what the handler is
+    # advised to do) — only the clarity guardrail reads it.
+    reply: str = ""
 
 
 class Guardrail(abc.ABC):

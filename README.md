@@ -98,7 +98,14 @@ transcript.
 9. **Evidence Logger** — writes the immutable, hash-chained record + audit event.
 
 **Guardrails** (`src/guardiancx/guardrails/`): `pii`, `injection`, `toxicity`
-(input); `confidence`, `hallucination`, `prohibited_action`, `approval` (output).
+(input); `confidence`, `hallucination`, `prohibited_action`, `approval` (output);
+`clarity` (reply) — the one that protects the customer rather than the firm,
+flagging a draft they cannot act on.
+
+**Customer-facing reply** (`src/guardiancx/agents/reply.py`): policy is written
+for handlers, so the reply is composed rather than quoted. Each clause carries
+approved `Offer:` wording used verbatim; derivation fills the gap for clauses
+without it. Acknowledge, at most two concrete offers, then hand the turn back.
 
 **Finance domain** (`src/guardiancx/finance/`): products, 10 banking journeys, 10
 financial-stress indicators, the journey → regulation map (CONC 7.3, Consumer
@@ -198,7 +205,7 @@ Notes for the cloud:
 ## Tests
 
 ```bash
-python -m pytest -q          # 76 tests: guardrails, pipeline, finance, voice, UI
+python -m pytest -q          # 103 tests: guardrails, pipeline, finance, voice, reply, UI
 python scripts/eval_rag.py   # retrieval quality, with and without journey re-ranking
 ```
 

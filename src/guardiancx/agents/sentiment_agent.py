@@ -53,8 +53,10 @@ _SCHEMA = {
 # Lexicon for the no-LLM path. Weighted by how strongly each phrase indicates
 # distress rather than mere negativity.
 _DISTRESS_LEXICON: list[tuple[float, str, list[str]]] = [
-    (0.95, "distressed", ["can't go on", "cant go on", "end it all", "no way out",
-                          "want to die", "harm myself", "give up completely"]),
+    (0.95, "distressed", ["can't go on", "cant go on", "can't carry on", "cant carry on",
+                          "how i'll carry on", "how ill carry on", "end it all", "no way out",
+                          "want to die", "harm myself", "hurt myself", "no point in",
+                          "give up completely", "hopeless"]),
     (0.80, "distressed", ["i'm desperate", "im desperate", "at breaking point",
                           "don't know what i'd do", "dont know what id do",
                           "don't know what to do", "terrified", "petrified",

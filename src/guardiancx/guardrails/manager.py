@@ -1,9 +1,14 @@
 """Guardrail manager — runs the registered guardrails and aggregates a report.
 
-Ordering matters: input guardrails (PII, injection, toxicity) run on the raw
-utterance; output guardrails (confidence, hallucination, approval) run on the
-recommendation. The manager exposes the masked text and a single GuardrailReport
-the Supervisor agent uses to route the case.
+Three stages, because there are three different things to protect. Input
+guardrails (PII, injection, toxicity) run on the raw utterance. Output guardrails
+(confidence, grounding, prohibited actions, approval) run on the recommendation —
+they protect the firm. **Reply guardrails** run on the draft the customer would
+actually hear, and protect the customer: correct advice phrased in policy
+language is still advice they cannot act on.
+
+The manager exposes the masked text and a single GuardrailReport the Supervisor
+agent uses to route the case.
 
 The output set includes a finance-specific check, `prohibited_action`, which
 blocks advice that would cause harm regardless of how well grounded it is —
@@ -24,6 +29,7 @@ from ..utils.logging import get_logger
 from ..utils.types import GuardrailReport, PolicyChunk, Recommendation
 from .approval import ApprovalGuardrail
 from .base import Guardrail, GuardrailContext
+from .clarity import ClarityGuardrail
 from .confidence import ConfidenceGuardrail
 from .hallucination import HallucinationGuardrail
 from .injection import InjectionGuardrail
@@ -36,6 +42,11 @@ log = get_logger("guardrails.manager")
 
 def default_input_guardrails() -> list[Guardrail]:
     return [PIIGuardrail(), InjectionGuardrail(), ToxicityGuardrail()]
+
+
+def default_reply_guardrails() -> list[Guardrail]:
+    """Guardrails on the customer-facing draft."""
+    return [ClarityGuardrail()]
 
 
 def default_output_guardrails() -> list[Guardrail]:
@@ -53,9 +64,11 @@ class GuardrailManager:
         self,
         input_guardrails: Optional[list[Guardrail]] = None,
         output_guardrails: Optional[list[Guardrail]] = None,
+        reply_guardrails: Optional[list[Guardrail]] = None,
     ):
         self.input_guardrails = input_guardrails or default_input_guardrails()
         self.output_guardrails = output_guardrails or default_output_guardrails()
+        self.reply_guardrails = reply_guardrails or default_reply_guardrails()
         self._nemo = self._maybe_load_nemo()
 
     def _maybe_load_nemo(self):
@@ -96,6 +109,19 @@ class GuardrailManager:
         )
         report = GuardrailReport()
         for g in self.output_guardrails:
+            report.results.append(g.check(ctx))
+        return report
+
+    def run_reply(self, reply: str, journey=None) -> GuardrailReport:
+        """Check the draft the customer would hear.
+
+        Runs after the reply is composed rather than inside the graph, because
+        the reply is written from the recommendation and does not exist yet when
+        the output guardrails run.
+        """
+        ctx = GuardrailContext(text="", reply=reply, journey=journey)
+        report = GuardrailReport()
+        for g in self.reply_guardrails:
             report.results.append(g.check(ctx))
         return report
 

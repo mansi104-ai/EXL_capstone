@@ -31,12 +31,14 @@ import streamlit as st
 
 from ..agents.graph import process_conversation, process_turn
 from ..agents.prompts import HANDLER_REPLY_SYSTEM
+from ..agents.reply import build_reply_prompt, compose_reply
 from ..database.repository import (
     delete_saved_conversation,
     list_saved_conversations,
     save_conversation,
 )
 from ..finance.taxonomy import JOURNEY_LABELS, PRODUCT_LABELS, STRESS_LABELS, Journey, Product
+from ..guardrails.manager import get_guardrail_manager
 from ..services.claude_client import EFFORT_REPLY, get_llm
 from ..services.speech import get_speech
 from ..services.synthetic_data import list_conversations
@@ -57,14 +59,6 @@ _EXAMPLES = [
     "I've been gambling again and I've maxed out the card. I don't know what to do.",
     "My daughter usually helps me with this — I find the online banking really confusing.",
 ]
-
-_OPENERS = {
-    Driver.LIFE_EVENTS: "I'm very sorry to hear that.",
-    Driver.HEALTH: "Thank you for letting me know, and I'm sorry you're dealing with this.",
-    Driver.RESILIENCE: "I understand, and I want to make this as manageable as possible for you.",
-    Driver.CAPABILITY: "Of course — I'll keep this simple and go at your pace.",
-}
-
 
 # --------------------------------------------------------------------------- #
 # Session state
@@ -275,17 +269,14 @@ def _reply_stream(ss: dict) -> Iterator[str]:
     llm = get_llm()
 
     if llm.available:
-        rec = decision.recommendation if decision else None
-        guidance = ((rec.summary + " " + " ".join(rec.adaptations)) if rec
-                    else "(no specific policy retrieved)")
-        context = state.get("financial_context")
-        sentiment = state.get("sentiment")
-        user = (
-            f"Customer said: {pending['customer_text']}\n"
-            f"Financial context: {context.summary() if context else 'unclassified'}\n"
-            f"Customer state: {sentiment.label if sentiment else 'unknown'}\n"
-            f"Policy guidance: {guidance}\n\n"
-            "Write the handler's reply:"
+        # The prompt is built from policy already translated into customer-facing
+        # offers, so the model is reading the vocabulary it should be using
+        # rather than the industry term it just saw.
+        user = build_reply_prompt(
+            pending["customer_text"], decision,
+            context=state.get("financial_context"),
+            sentiment=state.get("sentiment"),
+            retrieved=state.get("retrieved"),
         )
         produced = False
         for chunk in llm.stream_text(HANDLER_REPLY_SYSTEM, user,
@@ -295,36 +286,15 @@ def _reply_stream(ss: dict) -> Iterator[str]:
         if produced:
             return
 
-    # No model, or the model produced nothing: fall back to the policy-grounded
-    # template, released a sentence at a time so the channel behaves the same way.
-    for sentence in _template_reply(decision).split(". "):
+    # No model, or the model produced nothing: compose the reply from policy
+    # ourselves, released a sentence at a time so the channel behaves the same
+    # way. This is the path every demo runs on until a key is configured.
+    composed = compose_reply(decision, state.get("financial_context"),
+                             state.get("sentiment"), retrieved=state.get("retrieved"))
+    for sentence in composed.split(". "):
         if sentence:
             yield sentence.rstrip(".") + ". "
             time.sleep(0.12)
-
-
-def _template_reply(decision) -> str:
-    """A policy-grounded handler reply, used when no LLM is configured."""
-    if decision is None:
-        return "Thank you — how can I help you today?"
-    if not decision.assessment.triggered:
-        return "Thanks — I can help you with that. Let me pull up your account."
-    top = max(decision.assessment.signals, key=lambda s: s.score).driver
-    opener = _OPENERS.get(top, "Thank you for telling me.")
-    rec = decision.recommendation
-    if rec and rec.adaptations:
-        return (f"{opener} Here's how I can help, in line with our policy: "
-                f"{_short(rec.adaptations[0])}")
-    return f"{opener} Let me talk you through the support available."
-
-
-def _short(text: str, limit: int = 220) -> str:
-    text = text.strip()
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    dot = cut.rfind(". ")
-    return (cut[: dot + 1] if dot > 60 else cut).rstrip() + "…"
 
 
 def _finalise_reply(ss: dict, reply: str) -> None:
@@ -339,8 +309,17 @@ def _finalise_reply(ss: dict, reply: str) -> None:
         ss["conv_id"], ss["customer_id"], len(ss["turns"]), "agent", reply,
         channel=pending["channel"],
     )
+
+    # Check the draft the customer would actually hear. Correct advice phrased in
+    # policy language is still advice they cannot act on, so this runs on every
+    # reply whether it came from the model or the composer.
+    context = ss["states"][-2].get("financial_context") if len(ss["states"]) >= 2 else None
+    clarity = get_guardrail_manager().run_reply(
+        reply, journey=context.journey if context else None)
+
     ss["turns"].append({"speaker": "agent", "text": reply, "channel": pending["channel"],
-                        "voice": None, "eou": None, "redaction": None})
+                        "voice": None, "eou": None, "redaction": None,
+                        "clarity": [r.model_dump() for r in clarity.results]})
     ss["states"].append(state)
 
     if pending["channel"] != "voice":
@@ -395,6 +374,8 @@ def _render_turn(turn: dict, state: dict) -> None:
 
         if turn["speaker"] == "customer":
             _turn_signals(turn)
+        else:
+            _reply_signals(turn)
 
         decision = state.get("decision")
         if turn["speaker"] != "customer" or decision is None:
@@ -436,6 +417,13 @@ def _turn_signals(turn: dict) -> None:
 
     if bits:
         st.caption("  ·  ".join(bits))
+
+
+def _reply_signals(turn: dict) -> None:
+    """The clarity read on a drafted reply — shown to the handler who will send it."""
+    for result in turn.get("clarity") or []:
+        mark = "OK" if result["passed"] else "!"
+        st.caption(f"{mark} {result['detail']}")
 
 
 # --------------------------------------------------------------------------- #

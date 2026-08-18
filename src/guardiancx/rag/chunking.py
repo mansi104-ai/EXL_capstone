@@ -7,6 +7,13 @@ A clause carries three retrieval keys, not one:
   banking situations where it is the right clause to reach for;
 * the **products** it is scoped to, where it is product-specific.
 
+A clause may also carry `Offer:` lines — the wording a handler may actually say
+to the customer. Policy prose is written for staff, in the imperative and about a
+third party; deriving customer-facing speech from it mechanically works for
+simple clauses and produces mangled English for the rest. What a vulnerable
+customer hears should be approved wording, so it is authored here alongside the
+clause it comes from, where a compliance reviewer can see and sign off both.
+
 Driver alone retrieves plausible-sounding but wrong clauses: a bereaved customer
 in a scam call and a bereaved customer in a collections call both score high on
 `life_events` and need entirely different policy. The journey tag is what
@@ -29,6 +36,7 @@ _DRIVER_HEADER = re.compile(r"^##\s+Driver:\s+(.+?)\s*$", re.IGNORECASE)
 _SECTION_HEADER = re.compile(r"^###\s+(\S+)\s+[—-]\s+(.+?)\s*$")
 _JOURNEY_LINE = re.compile(r"^\*{0,2}Journeys?:\*{0,2}\s*(.+?)\s*$", re.IGNORECASE)
 _PRODUCT_LINE = re.compile(r"^\*{0,2}Products?:\*{0,2}\s*(.+?)\s*$", re.IGNORECASE)
+_OFFER_LINE = re.compile(r"^\*{0,2}Offer:\*{0,2}\s*(.+?)\s*$", re.IGNORECASE)
 
 _DRIVER_MAP = {
     "health": Driver.HEALTH,
@@ -54,7 +62,8 @@ def _parse_enum_list(raw: str, cls) -> list:
 class Chunk:
     def __init__(self, ref: str, title: str, driver: Optional[Driver], text: str,
                  source: str, journeys: Optional[list[Journey]] = None,
-                 products: Optional[list[Product]] = None):
+                 products: Optional[list[Product]] = None,
+                 offers: Optional[list[str]] = None):
         self.ref = ref
         self.title = title
         self.driver = driver
@@ -62,6 +71,7 @@ class Chunk:
         self.source = source
         self.journeys = journeys or []
         self.products = products or []
+        self.offers = offers or []
 
     @property
     def embed_text(self) -> str:
@@ -89,16 +99,18 @@ def chunk_policy_file(path: str | Path) -> list[Chunk]:
     body: list[str] = []
     journeys: list[Journey] = []
     products: list[Product] = []
+    offers: list[str] = []
 
     def flush():
-        nonlocal ref, title, body, journeys, products
+        nonlocal ref, title, body, journeys, products, offers
         if ref and title:
             text = " ".join(l.strip() for l in body if l.strip() and l.strip() != "---")
-            chunks.append(Chunk(ref, title, driver, text, p.name, journeys, products))
+            chunks.append(Chunk(ref, title, driver, text, p.name, journeys, products, offers))
         ref = title = None
         body = []
         journeys = []
         products = []
+        offers = []
 
     for line in lines:
         dm = _DRIVER_HEADER.match(line)
@@ -123,6 +135,10 @@ def chunk_policy_file(path: str | Path) -> list[Chunk]:
             pm = _PRODUCT_LINE.match(line.strip())
             if pm:
                 products = _parse_enum_list(pm.group(1), Product)
+                continue
+            om = _OFFER_LINE.match(line.strip())
+            if om:
+                offers.append(om.group(1).strip())
                 continue
             body.append(line)
     flush()
