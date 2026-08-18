@@ -1,0 +1,529 @@
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f6f7f9; --line: #dfe3e8; --ink: #1a1d21;
+    --muted: #6b7280; --accent: #2f6fed; --live: #16a34a; --warn: #d97706;
+    --alert: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1117; --panel: #171b22; --line: #2b3038; --ink: #e6e9ef;
+      --muted: #9aa4b2; --accent: #6f9bff; --live: #22c55e; --warn: #f59e0b;
+      --alert: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); padding: 14px; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.stop { background: var(--alert); border-color: var(--alert); color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.on { background: var(--live); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.speaking { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .status { font-weight: 600; }
+  .muted { color: var(--muted); }
+  .meter { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; flex: 1; min-width: 90px; }
+  .meter > i { display: block; height: 100%; width: 0%; background: var(--live); transition: width .08s linear; }
+  .transcript {
+    margin-top: 12px; min-height: 54px; padding: 11px 13px; border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--line); font-size: 15px;
+  }
+  .transcript .partial { color: var(--muted); font-style: italic; }
+  .eou { margin-top: 10px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+  .bar { height: 5px; border-radius: 3px; background: var(--line); width: 130px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width .12s linear; }
+  .tag {
+    font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--muted);
+  }
+  .tag.hold { color: var(--warn); border-color: var(--warn); }
+  .tag.commit { color: var(--live); border-color: var(--live); }
+  .err { margin-top: 10px; color: var(--alert); font-size: 13px; }
+</style>
+
+<div class="wrap">
+  <div class="row">
+    <span class="dot" id="dot"></span>
+    <span class="status" id="status">Idle</span>
+    <span class="muted" id="engine"></span>
+    <div class="meter" title="Microphone level"><i id="level"></i></div>
+    <div class="spacer"></div>
+    <button class="primary" id="start">Start call</button>
+    <button class="stop" id="stop" disabled>End call</button>
+  </div>
+
+  <div class="transcript" id="transcript"><span class="muted">Press “Start call”, then speak. The line stays open — pause naturally and GuardianCX decides when you have finished.</span></div>
+
+  <div class="eou">
+    <span class="muted">End-of-utterance</span>
+    <div class="bar" title="How finished the utterance looks"><i id="eouBar"></i></div>
+    <span class="tag" id="eouTag">waiting</span>
+    <span class="muted" id="eouReason"></span>
+  </div>
+
+  <div class="err" id="err"></div>
+</div>
+
+<audio id="player"></audio>
+
+<script>
+/* ------------------------------------------------------------------ *
+ * Streamlit component protocol (implemented directly — no build step) *
+ * ------------------------------------------------------------------ */
+const Streamlit = {
+  ready() {
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+  },
+  setHeight(h) {
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
+  },
+  setValue(value) {
+    window.parent.postMessage(
+      { isStreamlitMessage: true, type: "streamlit:setComponentValue",
+        value: value, dataType: "json" }, "*");
+  },
+};
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  dot: $("dot"), status: $("status"), engine: $("engine"), level: $("level"),
+  start: $("start"), stop: $("stop"), transcript: $("transcript"),
+  eouBar: $("eouBar"), eouTag: $("eouTag"), eouReason: $("eouReason"),
+  err: $("err"), player: $("player"),
+};
+
+let ARGS = {};
+let seq = 0;
+let lastSpokenId = null;
+
+/* ------------------------------------------------------------------ *
+ * End-of-utterance model — a faithful port of voice/endpointing.py    *
+ *                                                                     *
+ * It runs here as well as on the server because the decision to keep  *
+ * listening has to be made between keystrokes of speech, not after a  *
+ * network round trip. The server re-runs the same model on the        *
+ * committed turn, and that authoritative result is what gets traced   *
+ * and recorded — this copy exists purely to get the timing right.     *
+ * ------------------------------------------------------------------ */
+const MIN_SILENCE_MS = 450, MAX_SILENCE_MS = 4500, DISTRESS_GRACE_MS = 1500;
+
+const DANGLING = new Set(("and but or so because although though while whereas since unless " +
+  "until if when whether plus about above across after against at before behind between by " +
+  "for from in into like of off on onto over than through to toward towards under with within " +
+  "without a an the my your our their his her its this that these those some any no every each " +
+  "another is are was were am be been being have has had do does did will would shall should " +
+  "can could may might must going i we they he she it you").split(" "));
+const FILLERS = new Set("um uh erm er ah hmm mm like well just sort kind".split(" "));
+const COMPLETE_SHORT = new Set(["yes","yeah","yep","no","nope","okay","ok","right","sure",
+  "thanks","thank you","please","correct","that's right","that's it","go on","sorry","pardon",
+  "hello","goodbye","bye","i don't know","i'm not sure"]);
+const ANNOUNCES_VALUE = /\b(?:my|the|our)\s+(?:sort\s*code|account\s*number|card\s*number|reference|postcode|date\s+of\s+birth|number|address|name|email)\s*(?:is|are|was|would\s+be)?\s*$/i;
+const TRAILING_DIGITS = /(?:\b\d{1,4}[\s-]+){1,}\d{0,3}$/;
+
+function scoreCompleteness(text) {
+  const t = (text || "").trim();
+  if (!t) return { score: 0, reason: "nothing said yet" };
+  const low = t.toLowerCase();
+  const words = low.match(/[a-z']+/g) || [];
+  if (!words.length) return { score: 0, reason: "no words recognised" };
+
+  const stripped = low.replace(/[^a-z' ]/g, "").trim();
+  if (COMPLETE_SHORT.has(stripped)) return { score: 0.92, reason: "complete short answer" };
+  if (ANNOUNCES_VALUE.test(low)) return { score: 0.04, reason: "about to dictate a value" };
+  if (TRAILING_DIGITS.test(t)) return { score: 0.10, reason: "digits still being read out" };
+
+  const last = words[words.length - 1];
+  const lastTwo = words.slice(-2).join(" ");
+  if (FILLERS.has(last) || FILLERS.has(lastTwo)) return { score: 0.12, reason: `trailing filler (“${last}”)` };
+  if (DANGLING.has(last)) return { score: 0.08, reason: `clause left open on “${last}”` };
+  if (/[,;:]\s*$/.test(t)) return { score: 0.20, reason: "ends mid-clause on punctuation" };
+
+  const terminated = /[.!?…]\s*$/.test(t);
+  let score = terminated ? 0.80 : 0.50;
+  let reason = terminated ? "sentence-final punctuation" : "no terminator";
+
+  if (words.length <= 2 && score < 0.8) {
+    score -= 0.25; reason = "too short to be a finished thought";
+  } else if (words.length >= 12) {
+    score += 0.12; if (!terminated) reason = "long, self-contained utterance";
+  }
+  const openers = new Set("can could would will do does did is are am what why how when where who which should".split(" "));
+  if (t.endsWith("?") || openers.has(words[0])) {
+    score += 0.10;
+    if (t.endsWith("?")) reason = "question — turn handed over";
+  }
+  return { score: Math.max(0, Math.min(1, score)), reason };
+}
+
+// Quadratic, matching required_silence_ms() in endpointing.py: the wait collapses
+// toward the floor once the model is confident the thought is finished, and stays
+// long while it is not.
+function requiredSilenceMs(completeness, distress) {
+  const certainty = Math.max(0, Math.min(1, completeness));
+  const span = MAX_SILENCE_MS - MIN_SILENCE_MS;
+  const base = MIN_SILENCE_MS + Math.round(span * Math.pow(1 - certainty, 2));
+  return base + Math.round(DISTRESS_GRACE_MS * Math.max(0, Math.min(1, distress || 0)));
+}
+
+/* ------------------------------------------------------------------ *
+ * Prosody — the same six measurements voice/prosody.py takes from a   *
+ * WAV, taken here frame by frame with the Web Audio API. Only the     *
+ * measurements travel; the derivation and the thresholds live in      *
+ * Python so the two capture paths cannot drift apart.                 *
+ * ------------------------------------------------------------------ */
+const prosody = {
+  ctx: null, analyser: null, stream: null, buf: null, timer: null,
+  frames: [], pitches: [], startedAt: 0,
+
+  async start() {
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+    });
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = this.ctx.createMediaStreamSource(this.stream);
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 2048;
+    src.connect(this.analyser);
+    this.buf = new Float32Array(this.analyser.fftSize);
+    this.reset();
+    this.timer = setInterval(() => this.tick(), 30);
+  },
+
+  reset() { this.frames = []; this.pitches = []; this.startedAt = performance.now(); },
+
+  tick() {
+    if (!this.analyser) return;
+    this.analyser.getFloatTimeDomainData(this.buf);
+    let sum = 0;
+    for (let i = 0; i < this.buf.length; i++) sum += this.buf[i] * this.buf[i];
+    const rms = Math.sqrt(sum / this.buf.length);
+    this.frames.push(rms);
+    els.level.style.width = Math.min(100, rms * 320) + "%";
+    // Pitch is only meaningful on a voiced frame, and autocorrelation is the
+    // expensive part — so only run it when there is real energy present.
+    if (rms > 0.02) {
+      const f0 = this.estimateF0(this.buf, this.ctx.sampleRate);
+      if (f0) this.pitches.push(f0);
+    }
+    if (this.frames.length > 4000) this.frames.shift();  // ~2 min ceiling
+  },
+
+  // Normalised cross-correlation, matching _estimate_f0 in prosody.py. The
+  // correlation is divided by the energy of both overlapping segments, not by
+  // the overlap length — length "normalisation" grows with lag and biases the
+  // search toward reporting a pitch below the true one.
+  estimateF0(buf, rate) {
+    const minLag = Math.floor(rate / 400), maxLag = Math.floor(rate / 70);
+    let mean = 0;
+    for (let i = 0; i < buf.length; i++) mean += buf[i];
+    mean /= buf.length;
+    let total = 0;
+    for (let i = 0; i < buf.length; i++) { const v = buf[i] - mean; total += v * v; }
+    if (total <= 0) return 0;
+
+    let bestLag = 0, best = 0;
+    // Stride the lag search: at 48 kHz the plausible range is ~570 lags, and
+    // stepping by 2 halves the cost for a fraction of a hertz of resolution.
+    for (let lag = minLag; lag <= maxLag && lag < buf.length; lag += 2) {
+      let corr = 0, ea = 0, eb = 0;
+      for (let i = 0; i < buf.length - lag; i += 2) {
+        const a = buf[i] - mean, b = buf[i + lag] - mean;
+        corr += a * b; ea += a * a; eb += b * b;
+      }
+      const denom = Math.sqrt(ea * eb);
+      if (denom <= 0) continue;
+      const norm = corr / denom;
+      if (norm > best) { best = norm; bestLag = lag; }
+    }
+    if (!bestLag || best < 0.5) return 0;   // voicing floor
+    return rate / bestLag;
+  },
+
+  measure() {
+    const duration = (performance.now() - this.startedAt) / 1000;
+    if (!this.frames.length || duration < 0.35) return null;
+    const peak = Math.max(...this.frames) || 1;
+    const voiced = this.frames.filter((e) => e >= peak * 0.18);
+    if (!voiced.length) return null;
+    const mean = voiced.reduce((a, b) => a + b, 0) / voiced.length;
+    const sd = Math.sqrt(voiced.reduce((a, b) => a + (b - mean) ** 2, 0) / voiced.length);
+    const pMean = this.pitches.length
+      ? this.pitches.reduce((a, b) => a + b, 0) / this.pitches.length : 0;
+    const pSd = this.pitches.length > 1
+      ? Math.sqrt(this.pitches.reduce((a, b) => a + (b - pMean) ** 2, 0) / this.pitches.length) : 0;
+    return {
+      duration_s: duration,
+      // Float time-domain data is already -1..1, so scale to the same 0-1 band
+      // the WAV path produces from 16-bit samples.
+      loudness: Math.min(1, mean * 6),
+      loudness_variation: mean ? sd / mean : 0,
+      pitch_hz: pMean,
+      pitch_variation: pMean ? pSd / pMean : 0,
+      speech_ratio: voiced.length / this.frames.length,
+    };
+  },
+
+  stop() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+    if (this.ctx) this.ctx.close().catch(() => {});
+    this.ctx = this.analyser = this.stream = null;
+    els.level.style.width = "0%";
+  },
+};
+
+/* ------------------------------------------------------------------ *
+ * The call loop                                                        *
+ * ------------------------------------------------------------------ */
+const call = {
+  running: false, speaking: false, engine: "", recognizer: null, webkit: null,
+  committed: "", partial: "", lastSpeechAt: 0, evalTimer: null,
+
+  setStatus(text, cls) {
+    els.status.textContent = text;
+    els.dot.className = "dot" + (cls ? " " + cls : "");
+  },
+
+  fail(message) {
+    els.err.textContent = message;
+    Streamlit.setHeight(document.body.scrollHeight + 20);
+  },
+
+  async start() {
+    els.err.textContent = "";
+    els.start.disabled = true;
+    try {
+      await prosody.start();
+    } catch (e) {
+      els.start.disabled = false;
+      return this.fail("Microphone access was refused. Allow it in the browser, then start again.");
+    }
+    const azure = ARGS.token ? await this.startAzure() : false;
+    if (!azure && !this.startWebkit()) {
+      prosody.stop();
+      els.start.disabled = false;
+      return this.fail(
+        "No speech recogniser is available. Configure Azure Speech, or use Chrome or Edge, " +
+        "or switch to the push-to-talk recorder below.");
+    }
+    this.running = true;
+    this.committed = ""; this.partial = "";
+    this.lastSpeechAt = performance.now();
+    els.stop.disabled = false;
+    els.engine.textContent = "· " + this.engine;
+    this.setStatus("Listening", "on");
+    this.render();
+    this.evalTimer = setInterval(() => this.evaluate(), 150);
+  },
+
+  /* Azure Speech: the end-silence timeout is deliberately short so Azure
+     returns finished segments quickly. Azure decides where a *phrase* ends;
+     the EOU model above decides where the customer's *turn* ends. */
+  async startAzure() {
+    if (!window.SpeechSDK) return false;
+    try {
+      const cfg = SpeechSDK.SpeechConfig.fromAuthorizationToken(ARGS.token, ARGS.region);
+      cfg.speechRecognitionLanguage = ARGS.language || "en-GB";
+      cfg.setProperty(SpeechSDK.PropertyId.SpeechServiceConnection_EndSilenceTimeoutMs, "400");
+      const audio = SpeechSDK.AudioConfig.fromDefaultMicrophoneInput();
+      this.recognizer = new SpeechSDK.SpeechRecognizer(cfg, audio);
+
+      this.recognizer.recognizing = (_s, e) => {
+        if (this.speaking) return;
+        this.partial = e.result.text || "";
+        this.lastSpeechAt = performance.now();
+        this.render();
+      };
+      this.recognizer.recognized = (_s, e) => {
+        if (this.speaking) return;
+        const text = (e.result && e.result.text) || "";
+        if (text) {
+          this.committed = (this.committed + " " + text).trim();
+          this.lastSpeechAt = performance.now();
+        }
+        this.partial = "";
+        this.render();
+      };
+      this.recognizer.canceled = (_s, e) => {
+        if (e.reason === SpeechSDK.CancellationReason.Error) {
+          this.fail("Azure Speech stopped: " + (e.errorDetails || "unknown error"));
+        }
+      };
+      await new Promise((res, rej) =>
+        this.recognizer.startContinuousRecognitionAsync(res, rej));
+      this.engine = "Azure Speech";
+      return true;
+    } catch (e) {
+      console.warn("Azure Speech unavailable", e);
+      this.recognizer = null;
+      return false;
+    }
+  },
+
+  startWebkit() {
+    const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Ctor) return false;
+    const rec = new Ctor();
+    rec.lang = ARGS.language || "en-GB";
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (event) => {
+      if (this.speaking) return;
+      let partial = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) this.committed = (this.committed + " " + chunk).trim();
+        else partial += chunk;
+      }
+      this.partial = partial;
+      this.lastSpeechAt = performance.now();
+      this.render();
+    };
+    // The browser recogniser stops itself after a stretch of silence; restart it
+    // so the line genuinely stays open for as long as the call lasts.
+    rec.onend = () => { if (this.running && !this.speaking) { try { rec.start(); } catch (e) {} } };
+    rec.onerror = (e) => {
+      if (e.error === "not-allowed") this.fail("Microphone permission was denied.");
+    };
+    try { rec.start(); } catch (e) { return false; }
+    this.webkit = rec;
+    this.engine = "browser recogniser";
+    return true;
+  },
+
+  render() {
+    const text = (this.committed + " " + this.partial).trim();
+    if (!text) {
+      els.transcript.innerHTML = '<span class="muted">Listening…</span>';
+      return;
+    }
+    els.transcript.innerHTML =
+      this.escape(this.committed) +
+      (this.partial ? ' <span class="partial">' + this.escape(this.partial) + "</span>" : "");
+  },
+
+  escape(s) {
+    return (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  },
+
+  evaluate() {
+    if (!this.running || this.speaking) return;
+    const text = (this.committed + " " + this.partial).trim();
+    const { score, reason } = scoreCompleteness(text);
+    const needed = requiredSilenceMs(score, ARGS.distress || 0);
+    const silence = performance.now() - this.lastSpeechAt;
+
+    els.eouBar.style.width = Math.round(score * 100) + "%";
+    els.eouReason.textContent = text ? reason : "";
+
+    if (!text) {
+      els.eouTag.textContent = "waiting";
+      els.eouTag.className = "tag";
+      return;
+    }
+    const ready = silence >= needed;
+    els.eouTag.textContent = ready ? "committing" : "still speaking";
+    els.eouTag.className = "tag " + (ready ? "commit" : "hold");
+    if (ready) this.commit(Math.round(silence), reason, score);
+  },
+
+  commit(silenceMs, reason, completeness) {
+    const text = (this.committed + " " + this.partial).trim();
+    if (!text) return;
+    this.committed = ""; this.partial = "";
+    this.lastSpeechAt = performance.now();
+    const measurements = prosody.measure();
+    prosody.reset();
+    this.setStatus("Thinking", "speaking");
+    els.transcript.innerHTML = '<span class="muted">Sent — GuardianCX is responding…</span>';
+    Streamlit.setValue({
+      event: "utterance", seq: ++seq, text: text,
+      silence_ms: silenceMs, eou_reason: reason, eou_completeness: completeness,
+      prosody: measurements, engine: this.engine,
+    });
+  },
+
+  /* The reply is synthesised server-side (Azure neural voice) and arrives as
+     base64 audio. Recognition is muted for the duration of playback — without
+     that, the agent transcribes its own voice and answers itself. */
+  speak(audioB64, id) {
+    if (!audioB64 || id === lastSpokenId) return;
+    lastSpokenId = id;
+    this.speaking = true;
+    this.committed = ""; this.partial = "";
+    this.setStatus("Speaking", "speaking");
+    els.player.src = "data:audio/mp3;base64," + audioB64;
+    const resume = () => {
+      this.speaking = false;
+      this.lastSpeechAt = performance.now();
+      if (this.running) { this.setStatus("Listening", "on"); this.render(); }
+    };
+    els.player.onended = resume;
+    els.player.onerror = resume;
+    els.player.play().catch(resume);
+  },
+
+  stop() {
+    this.running = false;
+    if (this.evalTimer) clearInterval(this.evalTimer);
+    this.evalTimer = null;
+    if (this.recognizer) {
+      try { this.recognizer.stopContinuousRecognitionAsync(() => {}, () => {}); } catch (e) {}
+      this.recognizer = null;
+    }
+    if (this.webkit) { try { this.webkit.stop(); } catch (e) {} this.webkit = null; }
+    prosody.stop();
+    els.start.disabled = false;
+    els.stop.disabled = true;
+    els.engine.textContent = "";
+    this.setStatus("Idle", "");
+    els.transcript.innerHTML = '<span class="muted">Call ended. The transcript is in the conversation above.</span>';
+    els.eouTag.textContent = "waiting";
+    els.eouTag.className = "tag";
+    els.eouBar.style.width = "0%";
+    els.eouReason.textContent = "";
+  },
+};
+
+els.start.onclick = () => call.start();
+els.stop.onclick = () => call.stop();
+
+/* ------------------------------------------------------------------ *
+ * Wiring                                                              *
+ * ------------------------------------------------------------------ */
+window.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  ARGS = event.data.args || {};
+  if (ARGS.speak_audio) call.speak(ARGS.speak_audio, ARGS.speak_id);
+  if (ARGS.stop_signal && call.running) call.stop();
+  Streamlit.setHeight(document.body.scrollHeight + 20);
+});
+
+// The Azure Speech browser SDK is optional: without it the component falls back
+// to the browser's own recogniser, so the call still works.
+(function loadSdk() {
+  const s = document.createElement("script");
+  s.src = "https://aka.ms/csspeech/jsbrowserpackageraw";
+  s.async = true;
+  s.onload = () => console.log("Azure Speech SDK ready");
+  s.onerror = () => console.warn("Azure Speech SDK unavailable; using the browser recogniser.");
+  document.head.appendChild(s);
+})();
+
+Streamlit.ready();
+Streamlit.setHeight(document.body.scrollHeight + 20);
+</script>

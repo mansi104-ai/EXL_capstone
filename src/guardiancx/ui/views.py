@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import json
-import uuid
 from collections import Counter
-from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -12,7 +10,6 @@ import streamlit as st
 from config.settings import get_settings
 
 from ..agents.graph import get_pipeline, process_conversation, process_turn
-from ..agents.prompts import HANDLER_REPLY_SYSTEM
 from ..database.db import backend_name
 from ..database.repository import (
     customer_timeline,
@@ -22,15 +19,20 @@ from ..database.repository import (
     update_approval,
     verify_chain,
 )
-from ..guardrails.base import GuardrailContext
+from ..finance.taxonomy import (
+    ACUTE_STRESS,
+    HIGH_HARM_JOURNEYS,
+    JOURNEY_LABELS,
+    PRODUCT_LABELS,
+    STRESS_LABELS,
+)
 from ..guardrails.manager import get_guardrail_manager
 from ..rag.vector_store import ensure_ingested, get_vector_store
-from ..services.claude_client import get_claude, get_llm
+from ..services.claude_client import get_llm
 from ..services.embeddings import get_embedder
 from ..services.observability import get_observability
-from ..services.speech import get_speech
 from ..services.synthetic_data import list_conversations
-from ..utils.types import Driver, PolicyChunk, Recommendation, RiskLevel
+from ..utils.types import Driver, Recommendation, RiskLevel
 from . import charts as CH
 from . import components as C
 
@@ -69,6 +71,37 @@ def _guardrail_activations(df: pd.DataFrame) -> dict[str, int]:
     return dict(counts)
 
 
+def _journey_counts(df: pd.DataFrame) -> dict[str, int]:
+    if df.empty or "journey" not in df:
+        return {}
+    series = df["journey"].fillna("")
+    return {k: int(v) for k, v in series[series != ""].value_counts().items()}
+
+
+def _acute_turns(df: pd.DataFrame) -> int:
+    """Turns where the customer is already suffering detriment, not merely at
+    risk of it — the count that matters for the Consumer Duty support outcome."""
+    if df.empty or "stress_indicators" not in df:
+        return 0
+    acute = {s.value for s in ACUTE_STRESS}
+    return int(df["stress_indicators"].apply(
+        lambda items: bool(acute & set(items or []))).sum())
+
+
+def _high_harm_turns(df: pd.DataFrame) -> int:
+    if df.empty or "journey" not in df:
+        return 0
+    high_harm = {j.value for j in HIGH_HARM_JOURNEYS}
+    return int(df["journey"].isin(high_harm).sum())
+
+
+def _distress_values(df: pd.DataFrame) -> list[float]:
+    if df.empty or "sentiment_distress" not in df:
+        return []
+    # Only customer turns carry a reading; agent turns are stored as 0.0.
+    return [float(v) for v in df["sentiment_distress"].fillna(0.0) if v > 0]
+
+
 def _acceptance_rate(df: pd.DataFrame) -> float:
     if df.empty:
         return 0.0
@@ -78,7 +111,7 @@ def _acceptance_rate(df: pd.DataFrame) -> float:
 
 
 def _plot(fig, key: str) -> None:
-    st.plotly_chart(fig, use_container_width=True, theme="streamlit",
+    st.plotly_chart(fig, width="stretch", theme="streamlit",
                     config={"displayModeBar": False}, key=key)
 
 
@@ -106,6 +139,21 @@ def exec_dashboard() -> None:
     with row2[2]: C.metric_card("Evidence integrity", "Verified" if ok else "At risk",
                                 "append-only, hash-chained")
 
+    # The finance lens. Detriment and vulnerability are different axes, so the
+    # portfolio view reports both: how many turns showed a customer already being
+    # harmed, and how many arrived on a journey where harm is foreseeable.
+    acute = _acute_turns(df)
+    high_harm = _high_harm_turns(df)
+    voice_turns = int((df["channel"] == "voice").sum()) if not df.empty and "channel" in df else 0
+    row3 = st.columns(3)
+    with row3[0]: C.metric_card("Financial detriment", acute,
+                                "turns showing arrears, essential-spend conflict, "
+                                "scam or gambling harm")
+    with row3[1]: C.metric_card("High-harm journeys", high_harm,
+                                "collections, bereavement, scam, forbearance, gambling")
+    with row3[2]: C.metric_card("Calls handled on voice", voice_turns,
+                                "spoken turns with acoustic signals read")
+
     if df.empty:
         st.info("No activity yet. Seed the synthetic conversations on the Settings "
                 "page, or start a Live session, to populate the portfolio view.")
@@ -128,6 +176,24 @@ def exec_dashboard() -> None:
     with d:
         st.markdown("**Guardrail activations**")
         _plot(CH.guardrail_bar(_guardrail_activations(df)), "gx_guard")
+
+    e, f = st.columns(2)
+    with e:
+        st.markdown("**Caseload by banking journey**")
+        journeys = _journey_counts(df)
+        if journeys:
+            _plot(CH.journey_bar(journeys), "gx_journey")
+        else:
+            st.caption("No journeys classified yet.")
+    with f:
+        st.markdown("**Measured customer distress**")
+        distress = _distress_values(df)
+        if distress:
+            _plot(CH.distress_hist(distress), "gx_distress")
+            st.caption(f"Median {pd.Series(distress).median():.2f} across "
+                       f"{len(distress)} assessed turn(s).")
+        else:
+            st.caption("No sentiment readings recorded yet.")
 
     st.divider()
     st.markdown("**Recent high-risk cases** — routed to the Human Approval Queue")
@@ -152,211 +218,11 @@ def _download_report(df: pd.DataFrame, name: str) -> None:
 
 # --------------------------------------------------------------------------- #
 # 2. Live Conversation Monitor
+#
+# Lives in its own module — the live console carries the voice loop, the signal
+# rail and the conversation library, and had outgrown a section of this file.
 # --------------------------------------------------------------------------- #
-def _render_turn(turn: dict, state: dict) -> None:
-    role = "user" if turn["speaker"] == "customer" else "assistant"
-    with st.chat_message(role):
-        st.markdown(f"**{turn['speaker'].title()}:** {turn['text']}")
-        decision = state.get("decision")
-        if turn["speaker"] != "customer" or decision is None:
-            return
-        assessed = decision.assessment.triggered
-        label = "Agent decision trace" + (" — vulnerability signal detected" if assessed
-                                          else " — no signal")
-        with st.expander(label, expanded=bool(assessed)):
-            C.agent_trace(state.get("trace", []))
-            st.markdown("**Guardrails applied**")
-            C.guardrail_badges([r.model_dump() for r in decision.guardrails.results])
-        if decision.recommendation:
-            _render_recommendation(decision)
-
-
-def live_monitor() -> None:
-    C.hero("Live Conversation Monitor",
-           "Stream a conversation through the multi-agent pipeline and review every decision.")
-    mode = st.radio("Mode", ["Live session", "Saved conversation"], horizontal=True,
-                    label_visibility="collapsed")
-    if mode == "Saved conversation":
-        _live_saved()
-    else:
-        _live_session()
-
-
-def _live_saved() -> None:
-    convs = {f"{c['conversation_id']} — {c['customer_name']}": c for c in list_conversations()}
-    choice = st.selectbox("Conversation", list(convs))
-    conv = convs[choice]
-    st.caption(f"Product: {conv['product']} · Channel: {conv['channel']} · "
-               f"Customer: {conv['customer_id']}")
-    if st.button("Run through GuardianCX", type="primary"):
-        with st.spinner("Agents working…"):
-            st.session_state["monitor_states"] = process_conversation(conv)
-            st.session_state["monitor_conv"] = conv["conversation_id"]
-    if st.session_state.get("monitor_conv") == conv["conversation_id"]:
-        for turn, state in zip(conv["turns"], st.session_state.get("monitor_states", [])):
-            _render_turn(turn, state)
-
-
-def _new_live_ids() -> None:
-    ss = st.session_state
-    token = uuid.uuid4().hex[:6].upper()
-    ss["live_conv_id"] = f"LIVE-{token}"
-    ss["live_customer_id"] = f"CUST-{token}"
-    ss["live_turns"] = []
-    ss["live_states"] = []
-
-
-def _live_session() -> None:
-    """A clean customer chat. You play the customer: type (or speak) a message and
-    the handler agent replies in real time, grounded in policy. Behind each turn,
-    GuardianCX runs detection, RAG guidance and guardrails, and records evidence —
-    all visible in the expandable trace and across the other pages."""
-    ss = st.session_state
-    if "live_conv_id" not in ss:
-        _new_live_ids()
-
-    llm = get_llm()
-    speech = get_speech()
-    sp_status = speech.status()
-
-    # --- header: reset ---------------------------------------------------
-    left, right = st.columns([3, 1])
-    with left:
-        st.markdown("**Speak with the customer-care agent.** Type a message below "
-                    "as the customer and the agent responds.")
-    with right:
-        if st.button("New conversation", width="stretch"):
-            _new_live_ids()
-            st.rerun()
-
-    st.caption(f"Agent model: {llm.provider_label}  ·  Conversation {ss['live_conv_id']}")
-
-    # --- optional voice input (browser capture — works when deployed) ----
-    if sp_status["available"]:
-        with st.expander("Speak instead of typing (voice)"):
-            audio = st.audio_input("Record the customer, then stop")
-            if audio is not None:
-                data = audio.getvalue()
-                fingerprint = hash(data)
-                if data and fingerprint != ss.get("live_last_audio"):
-                    ss["live_last_audio"] = fingerprint
-                    try:
-                        with st.spinner("Transcribing…"):
-                            spoken = speech.transcribe_wav(data)
-                        if spoken:
-                            _add_customer_turn(spoken)
-                            st.rerun()
-                        else:
-                            st.warning("No speech was recognised — please try again.")
-                    except Exception as exc:  # noqa: BLE001
-                        st.error(f"Speech transcription failed: {exc}")
-    else:
-        st.caption(f"Voice input off — {sp_status['reason']}")
-
-    # --- conversation history -------------------------------------------
-    if not ss["live_turns"]:
-        st.info("Start the conversation — for example: "
-                "“My husband passed away last month and I'm struggling with the loan.”")
-    for turn, state in zip(ss["live_turns"], ss["live_states"]):
-        _render_turn(turn, state)
-
-    # --- chat input (pinned to the bottom) ------------------------------
-    prompt = st.chat_input("Type your message…")
-    if prompt and prompt.strip():
-        _add_customer_turn(prompt.strip())
-        st.rerun()
-
-    # --- advanced (testers only) ----------------------------------------
-    with st.expander("Advanced (for testers)"):
-        st.caption("Add a handler line manually, or edit the session identifiers.")
-        line = st.text_input("Handler (agent) line", placeholder="e.g. I'm sorry to hear that…")
-        if st.button("Add handler line") and line.strip():
-            _append_turn("agent", line.strip())
-            st.rerun()
-        c1, c2 = st.columns(2)
-        ss["live_conv_id"] = c1.text_input("Conversation ID", ss["live_conv_id"])
-        ss["live_customer_id"] = c2.text_input("Customer ID", ss["live_customer_id"])
-
-
-def _add_customer_turn(text: str) -> None:
-    """Add a customer turn and always produce the agent's reply."""
-    state = _append_turn("customer", text)
-    reply = _agent_reply(text, state)
-    if reply:
-        _append_turn("agent", reply)
-
-
-_OPENERS = {
-    Driver.LIFE_EVENTS: "I'm very sorry to hear that.",
-    Driver.HEALTH: "Thank you for letting me know, and I'm sorry you're dealing with this.",
-    Driver.RESILIENCE: "I understand, and I want to make this as manageable as possible for you.",
-    Driver.CAPABILITY: "Of course — I'll keep this simple and go at your pace.",
-}
-
-
-def _short(text: str, limit: int = 220) -> str:
-    text = text.strip()
-    if len(text) <= limit:
-        return text
-    cut = text[:limit]
-    dot = cut.rfind(". ")
-    return (cut[: dot + 1] if dot > 60 else cut).rstrip() + "…"
-
-
-def _template_reply(decision) -> str:
-    """A policy-grounded handler reply, used when no LLM key is configured."""
-    if decision is None:
-        return "Thank you — how can I help you today?"
-    triggered = decision.assessment.triggered
-    if not triggered:
-        return "Thanks — I can help you with that. Let me pull up your account."
-    top = max(decision.assessment.signals, key=lambda s: s.score).driver
-    opener = _OPENERS.get(top, "Thank you for telling me.")
-    rec = decision.recommendation
-    if rec and rec.adaptations:
-        return f"{opener} Here's how I can help, in line with our policy: {_short(rec.adaptations[0])}"
-    return f"{opener} Let me talk you through the support available."
-
-
-def _agent_reply(customer_text: str, state: dict) -> Optional[str]:
-    """The handler agent's reply. LLM-drafted when a key is configured, otherwise
-    a policy-grounded template — so there is always a response. Advisory: the
-    human handler would send/edit it, never the system."""
-    decision = state.get("decision")
-    llm = get_llm()
-    if llm.available:
-        rec = decision.recommendation if decision else None
-        guidance = (rec.summary + " " + " ".join(rec.adaptations)) if rec else "(no specific policy retrieved)"
-        user = f"Customer said: {customer_text}\nPolicy guidance: {guidance}\n\nWrite the handler's reply:"
-        drafted = llm.text(HANDLER_REPLY_SYSTEM, user, max_tokens=180)
-        if drafted and drafted.strip():
-            return drafted.strip()
-    return _template_reply(decision)
-
-
-def _append_turn(speaker: str, text: str) -> dict:
-    ss = st.session_state
-    idx = len(ss["live_turns"])
-    state = process_turn(ss["live_conv_id"], ss["live_customer_id"], idx, speaker, text)
-    ss["live_turns"].append({"speaker": speaker, "text": text})
-    ss["live_states"].append(state)
-    return state
-
-
-def _render_recommendation(decision) -> None:
-    rec = decision.recommendation
-    with st.container(border=True):
-        st.markdown(
-            f"{C.risk_pill(decision.risk_level.value)} "
-            f"{C.pill('approval: ' + decision.approval_status.value, C.WARN if decision.approval_status.value=='pending' else C.ACCENT)} "
-            f"&nbsp; <b>advisory guidance</b>",
-            unsafe_allow_html=True,
-        )
-        st.write(rec.summary)
-        for a in rec.adaptations:
-            st.markdown(f"- {a}")
-        st.caption("Citations: " + ", ".join(rec.citations) +
-                   f" · confidence {rec.confidence:.2f} · source {rec.source}")
+from .live_monitor import live_monitor  # noqa: E402,F401  (re-exported as a page)
 
 
 # --------------------------------------------------------------------------- #
@@ -381,6 +247,53 @@ def detection() -> None:
             st.markdown(f"{flag} **{s.driver.value}** — {s.score:.2f} "
                         f"<span style='opacity:.6'>{s.evidence}</span>", unsafe_allow_html=True)
 
+        st.divider()
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**Financial context**")
+            _financial_context_block(state)
+        with right:
+            st.markdown("**Customer state**")
+            sentiment = state.get("sentiment")
+            if sentiment and sentiment.source != "skipped":
+                st.markdown(f"{sentiment.label} · distress {sentiment.distress:.2f} · "
+                            f"valence {sentiment.valence:+.2f}")
+                C.meter("distress", sentiment.distress, C.scale_color(sentiment.distress))
+                C.quiet(sentiment.rationale or "—")
+            else:
+                C.quiet("No reading — this is a text sample with no audio to read.")
+
+
+def _financial_context_block(state: dict) -> None:
+    """What the Financial Context agent made of the turn.
+
+    Shown wherever guidance is shown, because the journey is what determines
+    which obligation the advice has to answer to — and a handler reading a
+    recommendation should be able to see that without leaving the page.
+    """
+    context = state.get("financial_context")
+    if context is None or context.source == "skipped":
+        C.quiet("Not classified.")
+        return
+    st.markdown(
+        f"**{JOURNEY_LABELS.get(context.journey, context.journey.value)}**  ·  "
+        f"{PRODUCT_LABELS.get(context.product, '—')}  ·  `{context.sourcebook}`"
+    )
+    C.chips([STRESS_LABELS.get(s, s.value) for s in context.stress_indicators],
+            tone="alert" if context.acute else "on")
+    if context.arrears_months:
+        C.quiet(f"{context.arrears_months} month(s) in arrears")
+    if context.obligations:
+        with st.expander("Obligations engaged by this journey"):
+            for obligation in context.obligations:
+                st.markdown(f"- {obligation}")
+            if context.prohibited:
+                st.markdown("**Must not be offered**")
+                for item in context.prohibited:
+                    st.markdown(f"- {item}")
+            st.caption("The prohibitions are enforced by the `prohibited_action` "
+                       "guardrail, not only requested in the prompt.")
+
 
 # --------------------------------------------------------------------------- #
 # 4. AI Guidance Panel
@@ -394,10 +307,17 @@ def guidance_panel() -> None:
         st.session_state["guide_state"] = process_turn("ADHOC", "", 0, "customer", text)
     state = st.session_state.get("guide_state")
     if state and state["decision"].recommendation:
-        _render_recommendation(state["decision"])
+        _financial_context_block(state)
+        C.recommendation_card(state["decision"])
         st.markdown("**Retrieved policy (RAG grounding)**")
         for c in state.get("retrieved", []):
-            st.caption(f"`{c.policy_reference}` {c.title} — score {c.score}")
+            matched = " · journey-matched" if c.journey_match else ""
+            st.caption(f"`{c.policy_reference}` {c.title} — score {c.score}{matched}")
+        st.caption(
+            "Retrieval is filtered by vulnerability driver and re-ranked by banking "
+            "journey, so a bereaved customer settling an estate and a bereaved "
+            "customer reporting a scam get different clauses."
+        )
     elif state:
         st.info("No vulnerability signal detected — no guidance generated.")
 
@@ -557,15 +477,18 @@ def customer_timeline_page() -> None:
 def _rag_eval_cached(k: int, embedder_signature: str) -> dict:
     """Cached RAG evaluation. `embedder_signature` busts the cache when the
     embedding backend changes."""
-    from ..rag.evaluation import evaluate_rag, load_testset
+    from ..rag.evaluation import compare_journey_reranking, load_testset
 
-    report = evaluate_rag(load_testset(), k=k)
+    reports = compare_journey_reranking(load_testset(), k=k)
+    report = reports["journey_aware"]
     return {
         "summary": report.as_summary(),
+        "baseline": reports["driver_only"].as_summary(),
         "per_driver": report.per_driver,
         "rows": [
             {
                 "driver": r.driver,
+                "journey": r.journey,
                 "query": r.query,
                 "expected": ", ".join(r.expected),
                 "retrieved (top-k)": ", ".join(r.retrieved),
@@ -580,8 +503,9 @@ def _rag_eval_cached(k: int, embedder_signature: str) -> dict:
 def _rag_evaluation_section() -> None:
     st.subheader("Retrieval quality — RAG evaluation")
     st.caption("Measured on a labelled test set (query → expected policy clause), "
-               "scoped by driver exactly as the Policy Retrieval agent queries. "
-               "This is how retrieval quality is proven, not spot-checked.")
+               "scoped by vulnerability driver and re-ranked by banking journey, "
+               "exactly as the Policy Retrieval agent queries. This is how retrieval "
+               "quality is proven, not spot-checked.")
     from ..services.embeddings import get_embedder
 
     k = st.select_slider("Cut-off (k)", options=[1, 2, 3, 5], value=3)
@@ -599,7 +523,26 @@ def _rag_evaluation_section() -> None:
     with m[2]: C.metric_card(f"Recall@{k}", f"{s['recall@k']:.2f}", "relevant / expected")
     with m[3]: C.metric_card("MRR", f"{s['mrr']:.2f}", "mean reciprocal rank")
 
+    baseline = ev["baseline"]
     st.caption(f"Embedder: {embedder.backend}  ·  {s['queries']} queries")
+
+    st.markdown("**What the finance layer contributes**")
+    st.caption(
+        "The same test set, retrieved two ways: filtered by vulnerability driver "
+        "alone — what a general-purpose tool can do — and re-ranked by the "
+        "classified banking journey, which is what knowing the situation buys. "
+        "Ranking is where it shows: both find a correct clause, journey-aware "
+        "retrieval puts it higher."
+    )
+    st.dataframe(pd.DataFrame([
+        {"configuration": "driver only",
+         f"hit-rate@{k}": baseline["hit_rate@k"], f"precision@{k}": baseline["precision@k"],
+         f"recall@{k}": baseline["recall@k"], "MRR": baseline["mrr"]},
+        {"configuration": "journey-aware (production)",
+         f"hit-rate@{k}": s["hit_rate@k"], f"precision@{k}": s["precision@k"],
+         f"recall@{k}": s["recall@k"], "MRR": s["mrr"]},
+    ]), width="stretch", hide_index=True)
+
     st.markdown("**Hit-rate by driver**")
     _plot(CH.driver_bar({d: round(v * 100) for d, v in ev["per_driver"].items()}), "gx_rageval")
     with st.expander("Per-query results"):

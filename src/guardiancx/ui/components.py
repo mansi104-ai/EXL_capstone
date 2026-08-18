@@ -17,8 +17,9 @@ MUTED = "#6b7280"
 _RISK_COLOR = {"low": ACCENT, "medium": WARN, "high": DANGER}
 _SEV_COLOR = {"info": ACCENT, "warn": WARN, "block": DANGER}
 _STAGE_COLOR = {
-    "conversation": NAVY_2, "vulnerability": "#5b6b7b", "policy": NAVY_2,
-    "guidance": ACCENT, "compliance": "#5b6b7b", "supervisor": NAVY, "evidence": "#4a5568",
+    "conversation": NAVY_2, "financial_context": "#3d5a80", "sentiment": "#6d597a",
+    "vulnerability": "#5b6b7b", "policy": NAVY_2, "guidance": ACCENT,
+    "compliance": "#5b6b7b", "supervisor": NAVY, "evidence": "#4a5568",
 }
 
 
@@ -63,6 +64,23 @@ def inject_css() -> None:
         .gx-sublabel {{ font-size:.7rem; letter-spacing:.08em; text-transform:uppercase; color:{MUTED}; }}
         .gx-footer {{ margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid rgba(0,0,0,.08);
                       color: {MUTED}; font-size: .72rem; }}
+
+        /* --- live signal rail --- */
+        .gx-meter-row {{ margin: .45rem 0 .6rem; }}
+        .gx-meter-head {{ display:flex; justify-content:space-between; font-size:.72rem;
+                          color:{MUTED}; letter-spacing:.04em; margin-bottom:.2rem; }}
+        .gx-meter-head b {{ color:{INK}; font-variant-numeric: tabular-nums; }}
+        .gx-meter {{ height:6px; border-radius:3px; background:rgba(15,23,42,.09); overflow:hidden; }}
+        .gx-meter > i {{ display:block; height:100%; border-radius:3px; }}
+        .gx-chip {{ display:inline-block; padding:.12rem .5rem; margin:0 .3rem .3rem 0;
+                    border-radius:999px; font-size:.7rem; font-weight:600;
+                    border:1px solid rgba(15,23,42,.18); color:{INK}; }}
+        .gx-chip.on {{ background:{WARN}; border-color:{WARN}; color:#fff; }}
+        .gx-chip.alert {{ background:{DANGER}; border-color:{DANGER}; color:#fff; }}
+        .gx-chip.ok {{ background:{ACCENT}; border-color:{ACCENT}; color:#fff; }}
+        .gx-rail-title {{ font-size:.7rem; letter-spacing:.1em; text-transform:uppercase;
+                          color:{MUTED}; margin:.9rem 0 .35rem; font-weight:700; }}
+        .gx-quiet {{ font-size:.78rem; color:{MUTED}; }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -139,3 +157,82 @@ def agent_trace(trace: list[dict]) -> None:
             f'<span style="font-size:.9rem">{step["summary"]}</span>',
             unsafe_allow_html=True,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Live signal rail
+#
+# The rail is what a handler actually watches during a call, so every element in
+# it answers "what should I do differently right now?" — a number with no action
+# attached does not earn its place.
+# --------------------------------------------------------------------------- #
+def meter(label: str, value: float, color: str = ACCENT, caption: str = "",
+          fmt: str = "{:.2f}") -> None:
+    """A labelled 0-1 bar."""
+    pct = max(0.0, min(1.0, float(value))) * 100
+    st.markdown(
+        f'<div class="gx-meter-row">'
+        f'<div class="gx-meter-head"><span>{label}</span><b>{fmt.format(value)}</b></div>'
+        f'<div class="gx-meter"><i style="width:{pct:.1f}%;background:{color}"></i></div>'
+        + (f'<div class="gx-metric-help">{caption}</div>' if caption else "")
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def chips(items: list[str], tone: str = "") -> None:
+    """A row of small labels — drivers, stress indicators, redaction categories."""
+    if not items:
+        st.markdown('<span class="gx-quiet">none</span>', unsafe_allow_html=True)
+        return
+    cls = f"gx-chip {tone}".strip()
+    st.markdown(
+        "".join(f'<span class="{cls}">{item}</span>' for item in items),
+        unsafe_allow_html=True,
+    )
+
+
+def rail_title(text: str) -> None:
+    st.markdown(f'<div class="gx-rail-title">{text}</div>', unsafe_allow_html=True)
+
+
+def quiet(text: str) -> None:
+    st.markdown(f'<span class="gx-quiet">{text}</span>', unsafe_allow_html=True)
+
+
+def risk_color(level: str) -> str:
+    return _RISK_COLOR.get(level, NAVY)
+
+
+def scale_color(value: float) -> str:
+    """Green below a third, amber to two thirds, red above — the same reading
+    everywhere a 0-1 indicator appears."""
+    if value >= 0.66:
+        return DANGER
+    if value >= 0.33:
+        return WARN
+    return ACCENT
+
+
+def recommendation_card(decision) -> None:
+    """The advisory guidance block — risk, approval state, adaptations, citations.
+
+    Shared by the live monitor and the guidance panel so a recommendation looks
+    and reads identically wherever a handler meets it.
+    """
+    rec = decision.recommendation
+    if rec is None:
+        return
+    pending = decision.approval_status.value == "pending"
+    with st.container(border=True):
+        st.markdown(
+            f"{risk_pill(decision.risk_level.value)} "
+            f"{pill('approval: ' + decision.approval_status.value, WARN if pending else ACCENT)} "
+            f"&nbsp; <b>advisory guidance</b>",
+            unsafe_allow_html=True,
+        )
+        st.write(rec.summary)
+        for adaptation in rec.adaptations:
+            st.markdown(f"- {adaptation}")
+        st.caption("Citations: " + ", ".join(rec.citations) +
+                   f" · confidence {rec.confidence:.2f} · source {rec.source}")

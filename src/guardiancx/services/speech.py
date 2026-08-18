@@ -1,4 +1,9 @@
-"""Azure Speech transcription service for GuardianCX.
+"""Azure Speech services for GuardianCX — the ears and the voice of the call.
+
+Three capabilities, which together close the loop the live console needs:
+speech in (`transcribe_wav`), speech out (`synthesize`), and a short-lived
+browser credential (`issue_token`) so continuous recognition can run in the
+page without the subscription key ever reaching it.
 
 Two capture paths, because they have different deployment constraints:
 
@@ -15,9 +20,11 @@ Two capture paths, because they have different deployment constraints:
 from __future__ import annotations
 
 import array
+import html
 import importlib.util
 import io
 import sys
+import time
 import wave
 from typing import Optional
 
@@ -32,6 +39,30 @@ log = get_logger("services.speech")
 # Azure Speech short-audio REST endpoint expects 16-bit mono PCM at 8 or 16 kHz.
 _TARGET_RATE = 16000
 _REST_TIMEOUT = 30
+
+# Default synthesis voice. A UK bank's handler should sound like one, and the
+# neural voices carry the warmth this context needs far better than the
+# standard ones.
+DEFAULT_VOICE = "en-GB-SoniaNeural"
+DEFAULT_LANGUAGE = "en-GB"
+
+# Speaking-style hints per emotional register. Not every voice supports every
+# style, so synthesis retries without the style block if Azure rejects it.
+STYLE_FOR_EMOTION = {
+    "distressed": "empathetic",
+    "sad": "empathetic",
+    "anxious": "empathetic",
+    "confused": "friendly",
+    "frustrated": "calm",
+    "angry": "calm",
+    "relieved": "friendly",
+    "hopeful": "friendly",
+    "calm": "",
+}
+
+# Tokens issued for the browser are valid for 10 minutes; refresh well inside
+# that so a long call never stalls on an expired credential.
+TOKEN_TTL_SECONDS = 540
 
 
 def _sdk_installed() -> bool:
@@ -103,6 +134,8 @@ def _normalise_wav(data: bytes) -> bytes:
 class SpeechService:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
+        self._token: Optional[str] = None
+        self._token_expires: float = 0.0
 
     # --- capability ------------------------------------------------------
     def status(self) -> dict:
@@ -120,9 +153,12 @@ class SpeechService:
         return {
             "available": credentials,      # browser capture + REST transcription
             "mic_available": credentials and sdk,  # host microphone (local only)
+            "tts_available": credentials,  # spoken replies
+            "streaming_available": credentials,  # continuous browser recognition
             "sdk_installed": sdk,
             "credentials": credentials,
             "region": self.settings.azure_speech_region or "",
+            "voice": DEFAULT_VOICE,
             "reason": reason,
         }
 
@@ -161,6 +197,99 @@ class SpeechService:
         if status in ("NoMatch", "InitialSilenceTimeout"):
             return None  # silence / unintelligible
         raise RuntimeError(f"Azure Speech could not transcribe the audio ({status}).")
+
+    # --- browser credential (continuous recognition in the page) ---------
+    def issue_token(self) -> tuple[str, str]:
+        """Mint a short-lived Azure Speech token for the browser.
+
+        The live console runs continuous recognition in the page via the Speech
+        JS SDK, which needs a credential. Shipping the subscription key to the
+        browser would expose it in the page source to every viewer; an issued
+        token expires in ten minutes and is scoped to speech alone. Returns
+        (token, region).
+        """
+        if not self.available:
+            raise RuntimeError(self.status()["reason"])
+
+        now = time.time()
+        if self._token and now < self._token_expires:
+            return self._token, self.settings.azure_speech_region
+
+        url = (f"https://{self.settings.azure_speech_region}"
+               ".api.cognitive.microsoft.com/sts/v1.0/issueToken")
+        resp = requests.post(
+            url,
+            headers={"Ocp-Apim-Subscription-Key": self.settings.azure_speech_key,
+                     "Content-Length": "0"},
+            timeout=_REST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Azure Speech token request failed ({resp.status_code}): {resp.text[:200]}"
+            )
+        self._token = resp.text
+        self._token_expires = now + TOKEN_TTL_SECONDS
+        return self._token, self.settings.azure_speech_region
+
+    # --- speech out ------------------------------------------------------
+    def synthesize(self, text: str, voice: str = DEFAULT_VOICE,
+                   emotion: str = "", language: str = DEFAULT_LANGUAGE) -> Optional[bytes]:
+        """Render the handler's reply as speech. Returns MP3 bytes.
+
+        `emotion` is the customer's state, not the handler's: a caller who is
+        distressed gets a reply delivered in an empathetic register, one who is
+        angry gets a deliberately calm one. Where the voice does not support the
+        requested style Azure rejects the SSML, so the call retries plain — a
+        reply that is spoken flatly is far better than one not spoken at all.
+        """
+        if not text or not text.strip():
+            return None
+        if not self.available:
+            raise RuntimeError(self.status()["reason"])
+
+        style = STYLE_FOR_EMOTION.get(emotion, "")
+        for attempt_style in ([style, ""] if style else [""]):
+            ssml = self._ssml(text, voice, language, attempt_style)
+            audio = self._post_ssml(ssml)
+            if audio is not None:
+                return audio
+        return None
+
+    @staticmethod
+    def _ssml(text: str, voice: str, language: str, style: str) -> str:
+        body = html.escape(text.strip())
+        # A slightly slower delivery is easier to follow for anyone in distress
+        # or with a capability-related need — which is most of this caseload.
+        inner = f'<prosody rate="-6%">{body}</prosody>'
+        if style:
+            inner = (f'<mstts:express-as style="{style}" styledegree="1.2">'
+                     f"{inner}</mstts:express-as>")
+        return (
+            f'<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+            f'xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="{language}">'
+            f'<voice name="{voice}">{inner}</voice></speak>'
+        )
+
+    def _post_ssml(self, ssml: str) -> Optional[bytes]:
+        url = (f"https://{self.settings.azure_speech_region}"
+               ".tts.speech.microsoft.com/cognitiveservices/v1")
+        resp = requests.post(
+            url,
+            headers={
+                "Ocp-Apim-Subscription-Key": self.settings.azure_speech_key,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+                "User-Agent": "GuardianCX",
+            },
+            data=ssml.encode("utf-8"),
+            timeout=_REST_TIMEOUT,
+        )
+        if resp.status_code == 200:
+            return resp.content
+        if resp.status_code == 400:
+            log.info("Azure TTS rejected the SSML (likely an unsupported style); retrying plain.")
+            return None
+        raise RuntimeError(f"Azure TTS returned {resp.status_code}: {resp.text[:200]}")
 
     # --- host microphone (local runs only) -------------------------------
     def recognize_once(self, language: str = "en-GB", timeout_seconds: int = 15) -> Optional[str]:

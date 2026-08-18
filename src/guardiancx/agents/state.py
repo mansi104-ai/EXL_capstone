@@ -3,10 +3,12 @@ from __future__ import annotations
 
 from typing import Any, Optional, TypedDict
 
+from ..finance.taxonomy import FinancialContext
 from ..utils.types import (
     GuardrailReport,
     PolicyChunk,
     Recommendation,
+    SentimentReading,
     VulnerabilityAssessment,
 )
 
@@ -18,10 +20,14 @@ class AgentState(TypedDict, total=False):
     turn_index: int
     speaker: str
     text: str
+    channel: str                  # "chat" | "voice"
+    voice_signals: dict[str, Any]  # VoiceSignals dump when the turn was spoken
 
     # produced by agents
     masked_text: str
     input_report: GuardrailReport
+    financial_context: FinancialContext
+    sentiment: SentimentReading
     assessment: VulnerabilityAssessment
     retrieved: list[PolicyChunk]
     recommendation: Optional[Recommendation]

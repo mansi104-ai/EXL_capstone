@@ -1,14 +1,34 @@
-"""Parse policy markdown into retrievable, driver-tagged chunks."""
+"""Parse policy markdown into retrievable, tagged chunks.
+
+A clause carries three retrieval keys, not one:
+
+* the **driver** it addresses (`## Driver: Health`) — the FCA vulnerability axis;
+* the **journeys** it applies to (`Journeys: arrears_collections, ...`) — the
+  banking situations where it is the right clause to reach for;
+* the **products** it is scoped to, where it is product-specific.
+
+Driver alone retrieves plausible-sounding but wrong clauses: a bereaved customer
+in a scam call and a bereaved customer in a collections call both score high on
+`life_events` and need entirely different policy. The journey tag is what
+separates them, and it is why retrieval in this system is journey-aware rather
+than similarity-only.
+
+Journey and product lines are metadata, not prose — they are stripped from the
+chunk text so they never pollute the embedding or the quoted clause.
+"""
 from __future__ import annotations
 
 import re
 from pathlib import Path
 from typing import Optional
 
+from ..finance.taxonomy import Journey, Product
 from ..utils.types import Driver
 
 _DRIVER_HEADER = re.compile(r"^##\s+Driver:\s+(.+?)\s*$", re.IGNORECASE)
 _SECTION_HEADER = re.compile(r"^###\s+(\S+)\s+[—-]\s+(.+?)\s*$")
+_JOURNEY_LINE = re.compile(r"^\*{0,2}Journeys?:\*{0,2}\s*(.+?)\s*$", re.IGNORECASE)
+_PRODUCT_LINE = re.compile(r"^\*{0,2}Products?:\*{0,2}\s*(.+?)\s*$", re.IGNORECASE)
 
 _DRIVER_MAP = {
     "health": Driver.HEALTH,
@@ -18,17 +38,46 @@ _DRIVER_MAP = {
 }
 
 
+def _parse_enum_list(raw: str, cls) -> list:
+    out = []
+    for token in re.split(r"[,;]", raw):
+        token = token.strip().strip("*` ").lower().replace(" ", "_")
+        if not token:
+            continue
+        try:
+            out.append(cls(token))
+        except ValueError:
+            continue
+    return out
+
+
 class Chunk:
-    def __init__(self, ref: str, title: str, driver: Optional[Driver], text: str, source: str):
+    def __init__(self, ref: str, title: str, driver: Optional[Driver], text: str,
+                 source: str, journeys: Optional[list[Journey]] = None,
+                 products: Optional[list[Product]] = None):
         self.ref = ref
         self.title = title
         self.driver = driver
         self.text = text
         self.source = source
+        self.journeys = journeys or []
+        self.products = products or []
 
     @property
     def embed_text(self) -> str:
-        return f"{self.ref} {self.title}. {self.text}"
+        """What gets embedded.
+
+        The journey names are included deliberately: they carry the operational
+        vocabulary ("arrears collections", "bereavement estate") that customer
+        utterances echo, and including them measurably improves retrieval over
+        embedding the clause prose alone.
+        """
+        tags = " ".join(j.value.replace("_", " ") for j in self.journeys)
+        return f"{self.ref} {self.title}. {self.text} {tags}".strip()
+
+    @property
+    def journey_values(self) -> list[str]:
+        return [j.value for j in self.journeys]
 
 
 def chunk_policy_file(path: str | Path) -> list[Chunk]:
@@ -38,14 +87,18 @@ def chunk_policy_file(path: str | Path) -> list[Chunk]:
     driver: Optional[Driver] = None
     ref = title = None
     body: list[str] = []
+    journeys: list[Journey] = []
+    products: list[Product] = []
 
     def flush():
-        nonlocal ref, title, body
+        nonlocal ref, title, body, journeys, products
         if ref and title:
             text = " ".join(l.strip() for l in body if l.strip() and l.strip() != "---")
-            chunks.append(Chunk(ref, title, driver, text, p.name))
+            chunks.append(Chunk(ref, title, driver, text, p.name, journeys, products))
         ref = title = None
         body = []
+        journeys = []
+        products = []
 
     for line in lines:
         dm = _DRIVER_HEADER.match(line)
@@ -63,6 +116,14 @@ def chunk_policy_file(path: str | Path) -> list[Chunk]:
             driver = None
             continue
         if ref:
+            jm = _JOURNEY_LINE.match(line.strip())
+            if jm:
+                journeys = _parse_enum_list(jm.group(1), Journey)
+                continue
+            pm = _PRODUCT_LINE.match(line.strip())
+            if pm:
+                products = _parse_enum_list(pm.group(1), Product)
+                continue
             body.append(line)
     flush()
     return chunks

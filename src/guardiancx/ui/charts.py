@@ -27,6 +27,22 @@ OUTCOME_COLORS = {
     "approved": "#0e7c66", "rejected": "#b23a48",
     "pending": "#b7791f", "not_required": "#9aa4af",
 }
+# Journeys are ranked by the harm that follows from mishandling them, so the
+# palette ranks with them: the four where a mistake causes real detriment take
+# the warm end, routine servicing the muted end. Colour is never the only cue —
+# the label always carries the meaning.
+JOURNEY_COLORS = {
+    "fraud_scam": "#b23a48",
+    "bereavement_estate": "#9c4f6e",
+    "gambling_harm": "#a05a2c",
+    "arrears_collections": "#c77d2e",
+    "affordability_shock": "#c79a2e",
+    "forbearance_request": "#4361a8",
+    "third_party_access": "#7b5ea7",
+    "product_sale": "#2a9d8f",
+    "complaint": "#5b6b7b",
+    "general_servicing": "#9aa4af",
+}
 _ACCENT = "#0e7c66"
 _GRID = "rgba(128,128,128,0.18)"
 
@@ -105,4 +121,32 @@ def score_gauge(value: float, title: str = "") -> go.Figure:
     ))
     fig.update_layout(margin=dict(l=8, r=8, t=8, b=0), height=140,
                       paper_bgcolor="rgba(0,0,0,0)")
+    return fig
+
+
+def journey_bar(counts: dict[str, int]) -> go.Figure:
+    """Turns by banking journey — where the caseload actually sits.
+
+    Ordered by volume rather than by the taxonomy's order, because the question
+    this chart answers is "what is this contact centre spending its day on?"
+    """
+    ordered = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    labels = [k.replace("_", " ") for k, _ in ordered]
+    values = [v for _, v in ordered]
+    colors = [JOURNEY_COLORS.get(k, _ACCENT) for k, _ in ordered]
+    fig = _hbar(labels, values, colors)
+    fig.update_layout(height=max(270, 30 * len(labels) + 60))
+    return fig
+
+
+def distress_hist(values: list[float]) -> go.Figure:
+    """Distribution of measured customer distress across assessed turns."""
+    fig = go.Figure(go.Histogram(
+        x=values, nbinsx=10, marker=dict(color=_ACCENT, line=dict(width=0)),
+        hovertemplate="distress %{x}: %{y} turn(s)<extra></extra>",
+    ))
+    fig.update_layout(**_BASE_LAYOUT)
+    fig.update_xaxes(range=[0, 1], showgrid=True, gridcolor=_GRID, zeroline=False,
+                     title_text="distress")
+    fig.update_yaxes(showgrid=True, gridcolor=_GRID, zeroline=False, title_text="")
     return fig

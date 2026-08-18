@@ -1,13 +1,23 @@
 # 🛡️ GuardianCX
 
-**Agentic Customer Experience for regulated financial-services conversations.**
+**Vulnerable-customer protection for UK retail banking and consumer credit.**
 
-GuardianCX detects and assists **vulnerable customers** in banking/insurance
-service conversations. A LangGraph multi-agent pipeline classifies vulnerability
-across the four FCA drivers, retrieves the firm's prescribed adaptation via RAG,
-enforces a full guardrail stack, requires human approval for high-risk guidance,
-and writes an **immutable, hash-chained evidence trail** — all surfaced through
-an enterprise multi-page Streamlit console and a FastAPI backend.
+GuardianCX detects and assists **vulnerable customers** *during* the call. A
+nine-agent LangGraph pipeline classifies the banking situation (product, journey,
+financial-stress indicators) and the customer's vulnerability across the four FCA
+drivers, retrieves the firm's prescribed adaptation via journey-aware RAG,
+enforces a seven-guardrail stack, requires human approval for high-risk guidance,
+and writes an **immutable, hash-chained evidence trail** — all surfaced through an
+enterprise multi-page Streamlit console and a FastAPI backend.
+
+The Live Conversation Monitor is a **real call**: continuous speech in, semantic
+end-of-utterance detection, prosody-informed sentiment, live PII redaction, a
+streamed reply, and a spoken answer in an Azure neural voice.
+
+It reasons on two independent axes — **vulnerability** (FG21/1) and **financial
+detriment** (arrears, essential-spend conflict, scam exposure, gambling harm) —
+because a financially literate customer can be deep in arrears, and a bereaved
+customer may have no financial stress at all.
 
 > Every external integration is **optional**. Unset services fall back to safe
 > local implementations, so `streamlit run app.py` works out of the box and each
@@ -22,10 +32,12 @@ an enterprise multi-page Streamlit console and a FastAPI backend.
 |-------|-----------|----------------------------|
 | Frontend | **Streamlit** (multipage) | — |
 | Backend API | **FastAPI** | — |
-| LLM | **Claude** (`claude-opus-4-8`) **or OpenRouter** (any model), structured JSON | keyword heuristic |
+| LLM | **Claude** (`claude-opus-5`, adaptive thinking, streaming) **or OpenRouter** (any model), structured JSON | deterministic classifiers |
 | Agent framework | **LangGraph** `StateGraph` | sequential runner |
 | Embeddings | **Azure OpenAI** → **sentence-transformers** (local, semantic) | hashing embedder |
-| Speech | **Azure Speech** | text input |
+| Speech in | **Azure Speech** continuous recognition (browser SDK + short-lived token) | Web Speech API → push-to-talk |
+| Speech out | **Azure Speech** neural TTS with SSML speaking styles | text only |
+| Prosody | standard-library DSP · Web Audio API | text channel |
 | Database | **PostgreSQL** | local SQLite |
 | Vector DB | **ChromaDB** (persistent) | in-memory cosine store |
 | Observability | **Langfuse** | in-memory event buffer |
@@ -34,10 +46,16 @@ an enterprise multi-page Streamlit console and a FastAPI backend.
 
 ## The 11 pages
 
-Executive Dashboard · Live Conversation Monitor · Vulnerability Detection ·
+Executive Dashboard · **Live Conversation Monitor** · Vulnerability Detection ·
 AI Guidance Panel · Human Approval Queue · Policy Knowledge Base (RAG search) ·
 Guardrails Dashboard · Audit Trail · Customer Timeline · Analytics & Evaluation ·
 Settings.
+
+The Live Conversation Monitor carries three channels — **Call**, **Chat** and
+**Library** — over one pipeline, with a live signal rail showing the journey and
+its obligations, the four driver scores, the customer's measured distress, what
+the voice is doing that the words are not, and what has been redacted out of the
+transcript.
 
 ## Architecture
 
@@ -46,13 +64,15 @@ Settings.
                          │  FastAPI  ──────────────── same pipeline ───────────┘
                          ▼
    utterance ──▶ ┌─────────────────── LangGraph pipeline ────────────────────┐
-                 │ Conversation → Vulnerability → Policy(RAG) → Guidance →    │
+   (spoken       │ Conversation → Financial Context → Sentiment →             │
+    or typed)    │ Vulnerability → Policy(RAG) → Guidance →                   │
                  │ Compliance → Supervisor → Evidence                         │
                  └───┬──────────┬───────────┬───────────┬──────────┬─────────┘
-        input guardrails    Claude      ChromaDB     Claude    output guardrails
-        (PII/injection/     (drivers)   (policy)     (advice)  (confidence/
-         toxicity)                                              hallucination/
-                                                                approval)
+        input guardrails    journey +   ChromaDB      LLM      output guardrails
+        (PII incl. spoken/  drivers     (journey-    (advice)  (confidence/
+         injection/toxicity)            re-ranked)             grounding/
+                                                               prohibited action/
+                                                               approval)
                                      │
                                      ▼
                     Immutable hash-chained evidence  ──▶  PostgreSQL / SQLite
@@ -62,15 +82,32 @@ Settings.
 **Agents** (`src/guardiancx/agents/`)
 
 1. **Conversation** — ingests the turn, runs input guardrails, masks PII.
-2. **Vulnerability Detection** — Claude (structured JSON) or heuristic; 4 drivers.
-3. **Policy Retrieval** — RAG over ChromaDB, scoped per triggered driver.
-4. **Guidance** — Claude drafts adaptation grounded strictly in retrieved policy.
-5. **Compliance** — runs output guardrails on the recommendation.
-6. **Supervisor** — sets risk, routes high-risk/blocked cases to human approval.
-7. **Evidence Logger** — writes the immutable, hash-chained record + audit event.
+2. **Financial Context** — product · banking journey · financial-stress
+   indicators · arrears; maps the journey to the obligations it engages.
+3. **Sentiment** — fuses what was said with how it was said (prosody) into
+   valence, arousal and a calibrated distress score.
+4. **Vulnerability Detection** — structured JSON or heuristic; 4 FCA drivers.
+5. **Policy Retrieval** — RAG over ChromaDB, filtered by driver and re-ranked by
+   journey; a high-harm journey retrieves even when no driver fired.
+6. **Guidance** — drafts an adaptation grounded strictly in retrieved policy,
+   told the journey's obligations and its prohibited actions.
+7. **Compliance** — runs output guardrails on the recommendation.
+8. **Supervisor** — sets risk and routes to human approval on any of five
+   grounds: high risk, a guardrail block, low confidence, customer distress, or
+   financial detriment already occurring.
+9. **Evidence Logger** — writes the immutable, hash-chained record + audit event.
 
 **Guardrails** (`src/guardiancx/guardrails/`): `pii`, `injection`, `toxicity`
-(input); `confidence`, `hallucination`, `approval` (output).
+(input); `confidence`, `hallucination`, `prohibited_action`, `approval` (output).
+
+**Finance domain** (`src/guardiancx/finance/`): products, 10 banking journeys, 10
+financial-stress indicators, the journey → regulation map (CONC 7.3, Consumer
+Duty PRIN 2A, Breathing Space, APP-fraud reimbursement, BCOBS, MCOB), and the
+prohibited actions each journey carries.
+
+**Live call** (`src/guardiancx/voice/`): `endpointing` (semantic EOU),
+`prosody` (acoustic distress), `live_pii` (spoken + written redaction on the
+streaming transcript).
 
 ## Quickstart
 
@@ -102,7 +139,9 @@ All via environment variables / `.env` (see `.env.example`). Highlights:
   deterministic heuristic.
 - `AZURE_OPENAI_*` — Azure OpenAI embeddings for RAG (otherwise a local
   sentence-transformers model is used; the hashing embedder is the last resort).
-- `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` — live speech in the chat.
+- `AZURE_SPEECH_KEY` / `AZURE_SPEECH_REGION` — continuous speech recognition
+  and the spoken reply. Without them the call falls back to the browser's own
+  recogniser (Chrome/Edge) and the reply is text only.
 - `GUARDIANCX_DATABASE_URL` — Postgres URL (else SQLite file).
 - `GUARDIANCX_CONFIDENCE_THRESHOLD`, `GUARDIANCX_HIGH_RISK_APPROVAL` — guardrail tuning.
 
@@ -118,6 +157,7 @@ exactly as in [.streamlit/secrets.toml.example](.streamlit/secrets.toml.example)
 ```toml
 OPENROUTER_API_KEY = "sk-or-..."
 OPENROUTER_MODEL   = "anthropic/claude-sonnet-4.5"
+ANTHROPIC_API_KEY  = "sk-ant-..."   # preferred; OpenRouter is the alternative
 AZURE_SPEECH_KEY   = "..."
 AZURE_SPEECH_REGION = "eastus"
 ```
@@ -127,8 +167,10 @@ the same code path works locally (`.env`) and on the cloud (secrets). Main file:
 `app.py`.
 
 Notes for the cloud:
-- **Voice input** uses in-browser recording (`st.audio_input`) → Azure Speech
-  REST, so it works on the cloud (no host microphone needed).
+- **The call runs in the browser.** Continuous recognition uses the Azure Speech
+  JS SDK with a short-lived token minted server-side (the subscription key never
+  reaches the page); push-to-talk uses `st.audio_input` → Azure Speech REST.
+  Neither needs a microphone on the host.
 - Embeddings fall back to the local hashing embedder unless you add
   `sentence-transformers` (heavier) or Azure OpenAI embeddings; for best
   retrieval quality run locally or configure Azure OpenAI.
@@ -156,5 +198,11 @@ Notes for the cloud:
 ## Tests
 
 ```bash
-python -m pytest -q      # guardrails + end-to-end pipeline
+python -m pytest -q          # 76 tests: guardrails, pipeline, finance, voice, UI
+python scripts/eval_rag.py   # retrieval quality, with and without journey re-ranking
 ```
+
+`tests/test_live_monitor.py` drives the live console headlessly with Streamlit's
+`AppTest`, so the page a reviewer will spend their time on is covered end to end —
+a chat turn through all nine agents, PII never reaching the transcript, and a
+session saved into the conversation library.

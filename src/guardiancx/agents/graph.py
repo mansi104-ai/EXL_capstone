@@ -2,8 +2,13 @@
 
 The flow:
 
-    conversation → vulnerability → policy → guidance → compliance
-                → supervisor → evidence
+    conversation → financial context → sentiment → vulnerability
+                → policy → guidance → compliance → supervisor → evidence
+
+Nine specialists, ordered so that each has what it needs. Financial context runs
+early because the journey it identifies is what makes retrieval precise; sentiment
+runs before detection so the acoustic read is available as corroborating evidence;
+evidence runs last because nothing is final until it is recorded.
 
 If LangGraph is installed, the nodes are wired into a real StateGraph. Otherwise
 a functionally identical sequential runner executes the same node functions, so
@@ -18,8 +23,10 @@ from . import (
     compliance_agent,
     conversation_agent,
     evidence_agent,
+    financial_context_agent,
     guidance_agent,
     policy_agent,
+    sentiment_agent,
     supervisor_agent,
     vulnerability_agent,
 )
@@ -30,6 +37,8 @@ log = get_logger("agents.graph")
 # Ordered pipeline of (name, node function).
 PIPELINE: list[tuple[str, Callable[[AgentState], AgentState]]] = [
     ("conversation", conversation_agent.run),
+    ("financial_context", financial_context_agent.run),
+    ("sentiment", sentiment_agent.run),
     ("vulnerability", vulnerability_agent.run),
     ("policy", policy_agent.run),
     ("guidance", guidance_agent.run),
@@ -81,15 +90,25 @@ def get_pipeline() -> Pipeline:
 
 
 def process_turn(conversation_id: str, customer_id: str, turn_index: int,
-                 speaker: str, text: str) -> AgentState:
+                 speaker: str, text: str, channel: str = "chat",
+                 voice_signals: dict | None = None) -> AgentState:
+    """Run one utterance through the graph.
+
+    `channel` and `voice_signals` are what let the same pipeline serve a typed
+    chat and a live call: on voice the acoustic measurements travel with the turn
+    and the sentiment agent fuses them with the words.
+    """
     state: AgentState = {
         "conversation_id": conversation_id,
         "customer_id": customer_id,
         "turn_index": turn_index,
         "speaker": speaker,
         "text": text,
+        "channel": channel,
         "trace": [],
     }
+    if voice_signals:
+        state["voice_signals"] = voice_signals
     return get_pipeline().invoke(state)
 
 
@@ -103,5 +122,7 @@ def process_conversation(conversation: dict) -> list[AgentState]:
             turn_index=i,
             speaker=turn["speaker"],
             text=turn["text"],
+            channel=turn.get("channel", conversation.get("channel", "chat")),
+            voice_signals=turn.get("voice_signals"),
         ))
     return states

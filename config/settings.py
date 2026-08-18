@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # --- Claude ---
     anthropic_api_key: str = ""
-    guardiancx_claude_model: str = "claude-opus-4-8"
+    guardiancx_claude_model: str = "claude-opus-5"
 
     # --- OpenRouter (alternative LLM provider; OpenAI-compatible) ---
     openrouter_api_key: str = ""

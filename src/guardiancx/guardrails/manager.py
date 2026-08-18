@@ -5,6 +5,10 @@ utterance; output guardrails (confidence, hallucination, approval) run on the
 recommendation. The manager exposes the masked text and a single GuardrailReport
 the Supervisor agent uses to route the case.
 
+The output set includes a finance-specific check, `prohibited_action`, which
+blocks advice that would cause harm regardless of how well grounded it is —
+offering credit to a customer disclosing gambling harm, for instance.
+
 Extending: add a Guardrail subclass and register it in `default_input_guardrails`
 or `default_output_guardrails`. Optionally, a NeMo Guardrails config can be
 layered in front via `nemo_rails` (loaded only if the package is present).
@@ -15,6 +19,7 @@ from typing import Optional
 
 from config.settings import get_settings
 
+from ..finance.taxonomy import Journey
 from ..utils.logging import get_logger
 from ..utils.types import GuardrailReport, PolicyChunk, Recommendation
 from .approval import ApprovalGuardrail
@@ -23,6 +28,7 @@ from .confidence import ConfidenceGuardrail
 from .hallucination import HallucinationGuardrail
 from .injection import InjectionGuardrail
 from .pii import PIIGuardrail
+from .prohibited_action import ProhibitedActionGuardrail
 from .toxicity import ToxicityGuardrail
 
 log = get_logger("guardrails.manager")
@@ -37,6 +43,7 @@ def default_output_guardrails() -> list[Guardrail]:
     return [
         ConfidenceGuardrail(),
         HallucinationGuardrail(),
+        ProhibitedActionGuardrail(),
         ApprovalGuardrail(require_high_risk=settings.guardiancx_high_risk_approval),
     ]
 
@@ -77,6 +84,7 @@ class GuardrailManager:
         text: str,
         recommendation: Optional[Recommendation],
         retrieved: list[PolicyChunk],
+        journey: Optional[Journey] = None,
     ) -> GuardrailReport:
         settings = get_settings()
         ctx = GuardrailContext(
@@ -84,6 +92,7 @@ class GuardrailManager:
             recommendation=recommendation,
             retrieved=retrieved,
             confidence_threshold=settings.guardiancx_confidence_threshold,
+            journey=journey,
         )
         report = GuardrailReport()
         for g in self.output_guardrails:

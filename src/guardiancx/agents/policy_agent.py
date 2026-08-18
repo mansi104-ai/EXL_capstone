@@ -1,43 +1,82 @@
 """Policy Retrieval Agent.
 
-For each triggered driver, retrieves the most relevant policy clause(s) from the
-ChromaDB knowledge base (RAG). The retrieved set is what grounds the Guidance
-agent and what the hallucination guardrail checks citations against.
+Retrieves the clauses that ground everything downstream. The retrieved set is
+what the Guidance agent may use, and what the hallucination guardrail checks
+citations against — so what happens here bounds what the system is able to say.
+
+Retrieval keys off two things, not one:
+
+* the **triggered vulnerability drivers**, which is the FCA axis, and
+* the **financial journey**, which is the banking axis.
+
+Both matter, and either alone is wrong. Driver-only retrieval hands a bereaved
+customer the same clauses whether they are settling an estate or reporting that
+someone emptied the account. Journey-only retrieval ignores why this customer
+needs the journey handled differently from the last one.
+
+There is also a case the driver axis misses entirely: a customer three payments
+behind, matter-of-fact about it, showing no vulnerability driver at all. No
+driver triggers, so a driver-only system retrieves nothing and offers nothing —
+while CONC 7.3's forbearance duty is fully engaged. So a high-harm journey
+retrieves on its own account, whether or not a driver fired.
 """
 from __future__ import annotations
 
+from ..finance.taxonomy import FinancialContext
 from ..rag.vector_store import ensure_ingested, get_vector_store
 from ..utils.types import PolicyChunk
 from .state import AgentState
+
+# Most clauses one turn's guidance is allowed to rest on. Beyond this the advice
+# stops being actionable on a live call.
+MAX_CLAUSES = 4
 
 
 def run(state: AgentState) -> AgentState:
     trace = state.setdefault("trace", [])
     assessment = state.get("assessment")
-    if assessment is None or not assessment.triggered:
+    context: FinancialContext = state.get("financial_context") or FinancialContext()
+
+    triggered = list(assessment.triggered) if assessment else []
+    journey_retrieval = context.high_harm or context.acute
+
+    if not triggered and not journey_retrieval:
         state["retrieved"] = []
-        trace.append({"agent": "policy", "summary": "No triggered driver — no retrieval."})
+        trace.append({"agent": "policy",
+                      "summary": "No triggered driver and no high-harm journey — no retrieval."})
         return state
 
     ensure_ingested()
     store = get_vector_store()
     query = state.get("masked_text") or state.get("text", "")
 
-    # Retrieve the top-2 clauses per triggered driver, keep the highest-scoring
-    # unique clauses overall (cap the set so guidance stays focused).
     seen: set[str] = set()
     candidates: list[PolicyChunk] = []
-    for driver in assessment.triggered:
-        for chunk in store.query(query, driver=driver, top_k=2):
+
+    # Per-driver retrieval, journey-boosted.
+    for driver in triggered:
+        for chunk in store.query(query, driver=driver, top_k=2, journey=context.journey):
             if chunk.policy_reference not in seen:
                 seen.add(chunk.policy_reference)
                 candidates.append(chunk)
+
+    # Journey retrieval across all drivers — this is what covers the customer in
+    # arrears who discloses no vulnerability at all.
+    if journey_retrieval:
+        for chunk in store.query(query, driver=None, top_k=3, journey=context.journey):
+            if chunk.policy_reference not in seen:
+                seen.add(chunk.policy_reference)
+                candidates.append(chunk)
+
     candidates.sort(key=lambda c: c.score, reverse=True)
-    retrieved = candidates[:4]
+    retrieved = candidates[:MAX_CLAUSES]
     state["retrieved"] = retrieved
+
+    matched = sum(1 for c in retrieved if c.journey_match)
     trace.append({
         "agent": "policy",
-        "summary": f"[RAG:{store.backend}] retrieved {len(retrieved)} clause(s): "
-                   f"{', '.join(c.policy_reference for c in retrieved)}.",
+        "summary": f"[RAG:{store.backend}] retrieved {len(retrieved)} clause(s) for "
+                   f"{context.journey.value}: {', '.join(c.policy_reference for c in retrieved)}"
+                   + (f" ({matched} journey-matched)" if matched else ""),
     })
     return state

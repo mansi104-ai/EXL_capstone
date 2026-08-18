@@ -1,8 +1,13 @@
-"""Persistence operations for evidence + audit records.
+"""Persistence operations for evidence, conversations and audit records.
 
 The evidence log is append-only and hash-chained: each new record embeds the
 SHA-256 hash of the previous record, so any later edit or reordering is
 detectable via `verify_chain()`.
+
+Alongside it sits the **conversation library** — whole conversations saved from
+the live console. Evidence records prove what the system decided; the library
+preserves what was actually said, so a call can be replayed and re-reviewed
+rather than only summarised.
 """
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ from typing import Any, Optional
 
 from ..utils.types import CaseDecision, now_utc
 from .db import session_scope
-from .models import AuditEvent, EvidenceRecord
+from .models import AuditEvent, ConversationRecord, EvidenceRecord
 
 GENESIS = "0" * 64
 
@@ -53,6 +58,13 @@ def record_evidence(
             "triggered_drivers": [d.value for d in decision.assessment.triggered],
             "max_score": round(decision.assessment.max_score, 4),
             "risk_level": decision.risk_level.value,
+            "journey": decision.journey,
+            "product": decision.product,
+            "stress_indicators": decision.stress_indicators,
+            "channel": decision.channel,
+            "sentiment_emotion": decision.sentiment.emotion if decision.sentiment else "",
+            "sentiment_distress": (round(decision.sentiment.distress, 4)
+                                   if decision.sentiment else 0.0),
             "recommendation": decision.recommendation.summary if decision.recommendation else "",
             "citations": decision.recommendation.citations if decision.recommendation else [],
             "model_confidence": decision.recommendation.confidence if decision.recommendation else 0.0,
@@ -110,6 +122,12 @@ def _record_body(r: EvidenceRecord) -> dict[str, Any]:
         "triggered_drivers": r.triggered_drivers,
         "max_score": r.max_score,
         "risk_level": r.risk_level,
+        "journey": r.journey,
+        "product": r.product,
+        "stress_indicators": r.stress_indicators,
+        "channel": r.channel,
+        "sentiment_emotion": r.sentiment_emotion,
+        "sentiment_distress": r.sentiment_distress,
         "recommendation": r.recommendation,
         "citations": r.citations,
         "model_confidence": r.model_confidence,
@@ -176,6 +194,129 @@ def _row_to_dict(r: EvidenceRecord) -> dict[str, Any]:
     return body
 
 
+def rechain_evidence() -> int:
+    """Recompute the whole chain from the genesis hash. Returns rows re-chained.
+
+    Used only after an additive schema migration, where the hashed record body
+    legitimately gains fields and every stored hash is therefore computed over a
+    different shape. Re-chaining restores internal consistency; the migration
+    that triggered it is written to the audit log, so the event is visible rather
+    than silent.
+    """
+    with session_scope() as session:
+        rows = session.query(EvidenceRecord).order_by(EvidenceRecord.id.asc()).all()
+        prev_hash = GENESIS
+        for r in rows:
+            r.prev_hash = prev_hash
+            r.record_hash = _hash(prev_hash, _record_body(r))
+            prev_hash = r.record_hash
+        return len(rows)
+
+
+# --------------------------------------------------------------------------- #
+# Conversation library
+# --------------------------------------------------------------------------- #
+def save_conversation(
+    conversation_id: str,
+    turns: list[dict[str, Any]],
+    customer_id: str = "",
+    customer_name: str = "",
+    product: str = "",
+    channel: str = "chat",
+    origin: str = "live",
+    max_risk: str = "low",
+    drivers: Optional[list[str]] = None,
+    journeys: Optional[list[str]] = None,
+    peak_distress: float = 0.0,
+    note: str = "",
+) -> str:
+    """Save or update a conversation. Idempotent on `conversation_id`.
+
+    Saving the same id again replaces the stored turns rather than creating a
+    duplicate, so a live session can be saved repeatedly as it grows.
+    """
+    with session_scope() as session:
+        row = (
+            session.query(ConversationRecord)
+            .filter(ConversationRecord.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        created = row is None
+        if row is None:
+            row = ConversationRecord(conversation_id=conversation_id, created_at=now_utc())
+            session.add(row)
+        row.updated_at = now_utc()
+        row.customer_id = customer_id
+        row.customer_name = customer_name
+        row.product = product
+        row.channel = channel
+        row.origin = origin
+        row.turns = turns
+        row.turn_count = len(turns)
+        row.max_risk = max_risk
+        row.drivers = drivers or []
+        row.journeys = journeys or []
+        row.peak_distress = round(peak_distress, 4)
+        row.note = note
+    audit("conversation.saved" if created else "conversation.updated",
+          conversation_id=conversation_id,
+          detail={"turns": len(turns), "origin": origin, "max_risk": max_risk})
+    return conversation_id
+
+
+def _conversation_to_dict(r: ConversationRecord) -> dict[str, Any]:
+    return {
+        "conversation_id": r.conversation_id,
+        "customer_id": r.customer_id,
+        "customer_name": r.customer_name,
+        "product": r.product,
+        "channel": r.channel,
+        "origin": r.origin,
+        "turns": r.turns or [],
+        "turn_count": r.turn_count,
+        "max_risk": r.max_risk,
+        "drivers": r.drivers or [],
+        "journeys": r.journeys or [],
+        "peak_distress": r.peak_distress,
+        "note": r.note,
+        "created_at": r.created_at.isoformat() if r.created_at else "",
+        "updated_at": r.updated_at.isoformat() if r.updated_at else "",
+    }
+
+
+def list_saved_conversations(limit: int = 200) -> list[dict[str, Any]]:
+    with session_scope() as session:
+        rows = (
+            session.query(ConversationRecord)
+            .order_by(ConversationRecord.updated_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [_conversation_to_dict(r) for r in rows]
+
+
+def get_saved_conversation(conversation_id: str) -> Optional[dict[str, Any]]:
+    with session_scope() as session:
+        row = (
+            session.query(ConversationRecord)
+            .filter(ConversationRecord.conversation_id == conversation_id)
+            .one_or_none()
+        )
+        return _conversation_to_dict(row) if row else None
+
+
+def delete_saved_conversation(conversation_id: str) -> bool:
+    with session_scope() as session:
+        deleted = (
+            session.query(ConversationRecord)
+            .filter(ConversationRecord.conversation_id == conversation_id)
+            .delete()
+        )
+    if deleted:
+        audit("conversation.deleted", conversation_id=conversation_id)
+    return bool(deleted)
+
+
 # --------------------------------------------------------------------------- #
 # Audit log
 # --------------------------------------------------------------------------- #
@@ -211,4 +352,5 @@ def list_audit(limit: int = 500) -> list[dict[str, Any]]:
 def clear_all() -> None:
     with session_scope() as session:
         session.query(EvidenceRecord).delete()
+        session.query(ConversationRecord).delete()
         session.query(AuditEvent).delete()

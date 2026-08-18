@@ -62,12 +62,41 @@ class VulnerabilityAssessment(BaseModel):
         return max((s.score for s in self.signals), default=0.0)
 
 
+class SentimentReading(BaseModel):
+    """How the customer sounds, fusing what was said with how it was said.
+
+    `voice` carries the acoustic measurements when the turn came in over the call
+    channel; on the text channel it is absent and the reading rests on the words
+    alone. Distress is deliberately kept separate from valence: a customer can be
+    perfectly polite and still be in crisis.
+    """
+
+    valence: float = 0.0        # -1 negative … 1 positive
+    arousal: float = 0.0        # 0 calm … 1 activated
+    distress: float = 0.0       # 0 … 1, calibrated probability of distress
+    emotion: str = "calm"
+    escalate: bool = False      # slow down, stop the process, prioritise the person
+    rationale: str = ""
+    source: str = "heuristic"   # "claude" | "openrouter" | "heuristic" | "skipped"
+    voice: Optional[dict[str, Any]] = None   # VoiceSignals dump when on a call
+
+    @property
+    def voice_backed(self) -> bool:
+        return bool(self.voice and self.voice.get("available"))
+
+    @property
+    def label(self) -> str:
+        return self.emotion.replace("_", " ").title()
+
+
 class PolicyChunk(BaseModel):
     policy_reference: str
     title: str
     driver: Optional[Driver] = None
     text: str
     score: float = 0.0
+    journeys: list[str] = Field(default_factory=list)   # finance journeys the clause covers
+    journey_match: bool = False                          # matched this turn's journey
 
 
 class Recommendation(BaseModel):
@@ -100,7 +129,13 @@ class GuardrailReport(BaseModel):
 
 
 class CaseDecision(BaseModel):
-    """The Supervisor agent's final routing decision for one turn."""
+    """The Supervisor agent's final routing decision for one turn.
+
+    Carries the finance and sentiment reads alongside the vulnerability
+    assessment, because the evidence record has to show *why* the turn was routed
+    the way it was — and on this system the reason is often the journey or the
+    customer's state rather than a driver score.
+    """
 
     conversation_id: str
     turn_index: int
@@ -110,4 +145,19 @@ class CaseDecision(BaseModel):
     risk_level: RiskLevel = RiskLevel.LOW
     approval_status: ApprovalStatus = ApprovalStatus.NOT_REQUIRED
     masked_text: str = ""
+    channel: str = "chat"                       # "chat" | "voice"
+    sentiment: Optional[SentimentReading] = None
+    financial_context: Optional[dict[str, Any]] = None   # FinancialContext dump
     created_at: datetime = Field(default_factory=now_utc)
+
+    @property
+    def journey(self) -> str:
+        return (self.financial_context or {}).get("journey", "")
+
+    @property
+    def product(self) -> str:
+        return (self.financial_context or {}).get("product", "")
+
+    @property
+    def stress_indicators(self) -> list[str]:
+        return list((self.financial_context or {}).get("stress_indicators", []))

@@ -11,6 +11,7 @@ import abc
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ..finance.taxonomy import Journey
 from ..utils.types import GuardrailResult, PolicyChunk, Recommendation
 
 
@@ -23,6 +24,9 @@ class GuardrailContext:
     recommendation: Optional[Recommendation] = None
     retrieved: list[PolicyChunk] = field(default_factory=list)
     confidence_threshold: float = 0.55
+    # The banking journey this turn was classified into. Lets a guardrail apply
+    # the rule that belongs to the situation rather than one blanket rule.
+    journey: Optional[Journey] = None
 
 
 class Guardrail(abc.ABC):
