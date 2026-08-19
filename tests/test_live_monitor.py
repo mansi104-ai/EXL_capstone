@@ -186,3 +186,37 @@ def test_library_replays_a_seeded_conversation():
     assert all("decision" in state for state in states)
     assert any(state["financial_context"].journey.value != "general_servicing"
                for state in states if state.get("speaker") == "customer")
+
+
+# --------------------------------------------------------------------------- #
+# Sessions that outlive a deploy
+# --------------------------------------------------------------------------- #
+def test_a_session_written_by_an_older_release_is_repaired():
+    """`st.session_state` survives a deploy.
+
+    A tab left open across a release still holds the dict the *old* code wrote,
+    so a key added since is simply absent — which crashed the page with
+    `KeyError: 'call'` in front of whoever was looking at it.
+    """
+    app = _app()
+    live = app.session_state["live"]
+    # Simulate the pre-call-flow shape.
+    for key in ("call", "ended", "consent_asks"):
+        live.pop(key, None)
+    app.run()
+
+    assert not app.exception, [e.value for e in app.exception]
+    repaired = app.session_state["live"]
+    assert "call" in repaired and "ended" in repaired
+
+
+def test_a_session_whose_turns_and_states_disagree_is_reset():
+    """Pairing a customer's words with another turn's decision would show the
+    reviewer something untrue, so the session starts again instead."""
+    app = _serving()
+    live = app.session_state["live"]
+    live["states"].pop()          # knock them out of step
+    app.run()
+
+    assert not app.exception, [e.value for e in app.exception]
+    assert app.session_state["live"]["turns"] == []

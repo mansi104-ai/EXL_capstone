@@ -90,22 +90,58 @@ _EXAMPLES = [
 # Session state
 # --------------------------------------------------------------------------- #
 def _session() -> dict:
-    """The live session's own slice of Streamlit state."""
-    if "live" not in st.session_state:
+    """The live session's own slice of Streamlit state.
+
+    `st.session_state` outlives a deploy. A browser tab left open across a
+    release still holds the session dict the *old* code wrote, so any key added
+    since — `call`, `ended` — is simply absent, and the first line that reads one
+    raises `KeyError` in front of whoever is looking at the screen.
+
+    So the shape is checked on every access rather than only on first use.
+    Missing keys are filled from a fresh session, which keeps a call in progress
+    alive across a deploy; a transcript that has lost its per-turn states is
+    beyond repair and is reset outright.
+    """
+    live = st.session_state.get("live")
+    if not isinstance(live, dict):
         _reset_session()
+        return st.session_state["live"]
+
+    template = _new_session()
+    missing = [key for key in template if key not in live]
+    if missing:
+        log.info("Session predates keys %s; filling them in.", missing)
+        for key in missing:
+            live[key] = template[key]
+
+    # The turns and their states are written in step. If they are not, the
+    # renderer would pair a customer's words with another turn's decision, so
+    # the session is started again rather than shown wrong.
+    if len(live.get("turns", [])) != len(live.get("states", [])):
+        log.warning("Session turns and states are out of step; resetting.")
+        _reset_session()
+
     return st.session_state["live"]
 
 
 def _reset_session(_unused: str = "") -> None:
-    """Start a fresh call.
+    """Start a fresh call."""
+    st.session_state["live"] = _new_session()
+
+
+def _new_session() -> dict:
+    """A blank call.
 
     No caller is chosen up front. A real inbound call begins with the handler
     knowing nothing but the ringing phone, and the identification stage is where
     that changes — pre-selecting the customer skipped the part of the call this
     system most needs to get right.
+
+    Kept separate from `_reset_session` so `_session` can use it as the template
+    for repairing a session written by an older release.
     """
     token = uuid.uuid4().hex[:6].upper()
-    st.session_state["live"] = {
+    return {
         "conv_id": f"CALL-{token}",
         "customer_id": "",           # set by identification
         "turns": [],                 # {speaker, text, channel, voice, eou, redaction}
