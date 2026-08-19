@@ -2,13 +2,16 @@
 
 The flow:
 
-    conversation → financial context → sentiment → vulnerability
-                → policy → guidance → compliance → supervisor → evidence
+    conversation → account access → financial context → sentiment
+                → vulnerability → policy → guidance → compliance
+                → supervisor → evidence
 
-Nine specialists, ordered so that each has what it needs. Financial context runs
-early because the journey it identifies is what makes retrieval precise; sentiment
-runs before detection so the acoustic read is available as corroborating evidence;
-evidence runs last because nothing is final until it is recorded.
+Ten specialists, ordered so that each has what it needs. Account access runs
+second, because whether the caller may be told something has to be settled before
+anything is drafted that might say it; financial context runs early because the
+journey it identifies is what makes retrieval precise; sentiment runs before
+detection so the acoustic read is available as corroborating evidence; evidence
+runs last because nothing is final until it is recorded.
 
 If LangGraph is installed, the nodes are wired into a real StateGraph. Otherwise
 a functionally identical sequential runner executes the same node functions, so
@@ -20,6 +23,7 @@ from typing import Callable
 
 from ..utils.logging import get_logger
 from . import (
+    account_agent,
     compliance_agent,
     conversation_agent,
     evidence_agent,
@@ -37,6 +41,7 @@ log = get_logger("agents.graph")
 # Ordered pipeline of (name, node function).
 PIPELINE: list[tuple[str, Callable[[AgentState], AgentState]]] = [
     ("conversation", conversation_agent.run),
+    ("account_access", account_agent.run),
     ("financial_context", financial_context_agent.run),
     ("sentiment", sentiment_agent.run),
     ("vulnerability", vulnerability_agent.run),

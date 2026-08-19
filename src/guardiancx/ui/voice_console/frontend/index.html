@@ -317,7 +317,7 @@ const call = {
       prosody.stop();
       els.start.disabled = false;
       return this.fail(
-        "No speech recogniser is available. Configure Azure Speech, or use Chrome or Edge, " +
+        "No speech recogniser is available. Use Chrome or Edge, " +
         "or switch to the push-to-talk recorder below.");
     }
     this.running = true;
@@ -360,15 +360,15 @@ const call = {
       };
       this.recognizer.canceled = (_s, e) => {
         if (e.reason === SpeechSDK.CancellationReason.Error) {
-          this.fail("Azure Speech stopped: " + (e.errorDetails || "unknown error"));
+          this.fail("Speech recognition stopped: " + (e.errorDetails || "unknown error"));
         }
       };
       await new Promise((res, rej) =>
         this.recognizer.startContinuousRecognitionAsync(res, rej));
-      this.engine = "Azure Speech";
+      this.engine = "high-accuracy recognition";
       return true;
     } catch (e) {
-      console.warn("Azure Speech unavailable", e);
+      console.warn("Streaming recogniser unavailable", e);
       this.recognizer = null;
       return false;
     }
@@ -401,7 +401,7 @@ const call = {
     };
     try { rec.start(); } catch (e) { return false; }
     this.webkit = rec;
-    this.engine = "browser recogniser";
+    this.engine = "browser recognition";
     return true;
   },
 
@@ -519,8 +519,8 @@ window.addEventListener("message", (event) => {
   const s = document.createElement("script");
   s.src = "https://aka.ms/csspeech/jsbrowserpackageraw";
   s.async = true;
-  s.onload = () => console.log("Azure Speech SDK ready");
-  s.onerror = () => console.warn("Azure Speech SDK unavailable; using the browser recogniser.");
+  s.onload = () => console.log("streaming recogniser ready");
+  s.onerror = () => console.warn("streaming recogniser unavailable; using the browser one.");
   document.head.appendChild(s);
 })();
 

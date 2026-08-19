@@ -70,9 +70,15 @@ def record_evidence(
             "model_confidence": decision.recommendation.confidence if decision.recommendation else 0.0,
             "detection_source": decision.assessment.source,
             "guardrails": [r.model_dump() for r in decision.guardrails.results],
+            "routing_reasons": list(decision.routing_reasons),
             "approval_status": decision.approval_status.value,
             "decided_by": decided_by,
             "decision_note": decision_note,
+            # Must be present even though it is always empty at creation: the
+            # hash written here and the hash `verify_chain` recomputes from
+            # `_record_body` are over the same dict, so a key in one and not the
+            # other silently breaks the chain for every record after it.
+            "amended_recommendation": "",
             "masked_text": decision.masked_text,
         }
         record_hash = _hash(prev_hash, body)
@@ -88,8 +94,15 @@ def record_evidence(
     return record_id
 
 
-def update_approval(record_id: str, status: str, decided_by: str, note: str = "") -> bool:
+def update_approval(record_id: str, status: str, decided_by: str, note: str = "",
+                    amended: str = "") -> bool:
     """Set the human decision on a pending record.
+
+    `amended` carries the reviewer's rewrite when they approved a changed
+    version. The original recommendation is never overwritten - what the system
+    proposed and what the human sent are both part of the evidence, and a record
+    that quietly replaced one with the other could not answer "did the model get
+    this right?" six months later.
 
     The approval decision is a legitimate post-hoc annotation, so we re-chain
     from this record forward to keep the hash chain valid and tamper-evident.
@@ -102,6 +115,7 @@ def update_approval(record_id: str, status: str, decided_by: str, note: str = ""
         rows[idx].approval_status = status
         rows[idx].decided_by = decided_by
         rows[idx].decision_note = note
+        rows[idx].amended_recommendation = amended
         # Re-hash from idx forward.
         prev_hash = rows[idx].prev_hash
         for r in rows[idx:]:
@@ -133,9 +147,11 @@ def _record_body(r: EvidenceRecord) -> dict[str, Any]:
         "model_confidence": r.model_confidence,
         "detection_source": r.detection_source,
         "guardrails": r.guardrails,
+        "routing_reasons": r.routing_reasons or [],
         "approval_status": r.approval_status,
         "decided_by": r.decided_by,
         "decision_note": r.decision_note,
+        "amended_recommendation": r.amended_recommendation or "",
         "masked_text": r.masked_text,
     }
 

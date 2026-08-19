@@ -82,25 +82,36 @@ transcript.
 **Agents** (`src/guardiancx/agents/`)
 
 1. **Conversation** — ingests the turn, runs input guardrails, masks PII.
-2. **Financial Context** — product · banking journey · financial-stress
+2. **Account Access** — what the caller asked the ledger for, whose money it is,
+   and how much may be said. Refuses a third party's data outright.
+3. **Financial Context** — product · banking journey · financial-stress
    indicators · arrears; maps the journey to the obligations it engages.
-3. **Sentiment** — fuses what was said with how it was said (prosody) into
+4. **Sentiment** — fuses what was said with how it was said (prosody) into
    valence, arousal and a calibrated distress score.
-4. **Vulnerability Detection** — structured JSON or heuristic; 4 FCA drivers.
-5. **Policy Retrieval** — RAG over ChromaDB, filtered by driver and re-ranked by
+5. **Vulnerability Detection** — structured JSON or heuristic; 4 FCA drivers.
+6. **Policy Retrieval** — RAG over ChromaDB, filtered by driver and re-ranked by
    journey; a high-harm journey retrieves even when no driver fired.
-6. **Guidance** — drafts an adaptation grounded strictly in retrieved policy,
+7. **Guidance** — drafts an adaptation grounded strictly in retrieved policy,
    told the journey's obligations and its prohibited actions.
-7. **Compliance** — runs output guardrails on the recommendation.
-8. **Supervisor** — sets risk and routes to human approval on any of five
+8. **Compliance** — runs output guardrails on the recommendation.
+9. **Supervisor** — sets risk and routes to human approval on any of five
    grounds: high risk, a guardrail block, low confidence, customer distress, or
    financial detriment already occurring.
-9. **Evidence Logger** — writes the immutable, hash-chained record + audit event.
+10. **Evidence Logger** — writes the immutable, hash-chained record + audit event.
 
 **Guardrails** (`src/guardiancx/guardrails/`): `pii`, `injection`, `toxicity`
 (input); `confidence`, `hallucination`, `prohibited_action`, `approval` (output);
-`clarity` (reply) — the one that protects the customer rather than the firm,
-flagging a draft they cannot act on.
+`data_disclosure` and `clarity` (reply) — the first blocks any account identifier
+reaching the customer, the second flags a draft they cannot act on.
+
+**Consent** (`src/guardiancx/agents/consent.py`): every call opens by asking to
+record, and nothing is assessed until the customer answers. A refusal ends the
+call; a question is not consent.
+
+**Customer ledger** (`src/guardiancx/finance/accounts.py`): synthetic customers,
+accounts, balances, arrears and transactions — including a joint mortgage and a
+sole card in a deceased spouse's name, which is what the third-party refusal is
+tested against.
 
 **Customer-facing reply** (`src/guardiancx/agents/reply.py`): policy is written
 for handlers, so the reply is composed rather than quoted. Each clause carries
@@ -205,7 +216,7 @@ Notes for the cloud:
 ## Tests
 
 ```bash
-python -m pytest -q          # 103 tests: guardrails, pipeline, finance, voice, reply, UI
+python -m pytest -q          # 158 tests: guardrails, pipeline, finance, voice, reply, UI
 python scripts/eval_rag.py   # retrieval quality, with and without journey re-ranking
 ```
 

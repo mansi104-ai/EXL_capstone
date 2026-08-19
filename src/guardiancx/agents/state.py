@@ -26,6 +26,7 @@ class AgentState(TypedDict, total=False):
     # produced by agents
     masked_text: str
     input_report: GuardrailReport
+    account_request: Any        # AccountRequest — what the ledger may tell them
     financial_context: FinancialContext
     sentiment: SentimentReading
     assessment: VulnerabilityAssessment

@@ -73,6 +73,7 @@ def run(state: AgentState) -> AgentState:
         approval_status=approval,
         masked_text=state.get("masked_text", ""),
         channel=state.get("channel", "chat"),
+        routing_reasons=reasons,
         sentiment=sentiment if sentiment.source != "skipped" else None,
         financial_context=context.model_dump(mode="json") if context.source != "skipped" else None,
     )

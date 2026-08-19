@@ -29,8 +29,11 @@ class GuardrailContext:
     journey: Optional[Journey] = None
     # The draft reply the customer would actually hear. Distinct from `text`
     # (what the customer said) and from `recommendation` (what the handler is
-    # advised to do) — only the clarity guardrail reads it.
+    # advised to do) — only the reply-stage guardrails read it.
     reply: str = ""
+    # Whether the Account Access agent refused this turn's data request, so the
+    # disclosure guardrail can check the reply actually declines it.
+    account_refused: bool = False
 
 
 class Guardrail(abc.ABC):

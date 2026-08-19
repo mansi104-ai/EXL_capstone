@@ -12,7 +12,9 @@ agent uses to route the case.
 
 The output set includes a finance-specific check, `prohibited_action`, which
 blocks advice that would cause harm regardless of how well grounded it is —
-offering credit to a customer disclosing gambling harm, for instance.
+offering credit to a customer disclosing gambling harm, for instance. The reply
+set includes `data_disclosure`, which blocks any identifier from the account book
+appearing in what the customer is told.
 
 Extending: add a Guardrail subclass and register it in `default_input_guardrails`
 or `default_output_guardrails`. Optionally, a NeMo Guardrails config can be
@@ -30,6 +32,7 @@ from ..utils.types import GuardrailReport, PolicyChunk, Recommendation
 from .approval import ApprovalGuardrail
 from .base import Guardrail, GuardrailContext
 from .clarity import ClarityGuardrail
+from .disclosure import DisclosureGuardrail
 from .confidence import ConfidenceGuardrail
 from .hallucination import HallucinationGuardrail
 from .injection import InjectionGuardrail
@@ -45,8 +48,12 @@ def default_input_guardrails() -> list[Guardrail]:
 
 
 def default_reply_guardrails() -> list[Guardrail]:
-    """Guardrails on the customer-facing draft."""
-    return [ClarityGuardrail()]
+    """Guardrails on the customer-facing draft.
+
+    Disclosure runs first and blocks; clarity runs second and warns. A reply that
+    leaks an account number is not improved by being easy to understand.
+    """
+    return [DisclosureGuardrail(), ClarityGuardrail()]
 
 
 def default_output_guardrails() -> list[Guardrail]:
@@ -112,14 +119,16 @@ class GuardrailManager:
             report.results.append(g.check(ctx))
         return report
 
-    def run_reply(self, reply: str, journey=None) -> GuardrailReport:
+    def run_reply(self, reply: str, journey=None,
+                  account_refused: bool = False) -> GuardrailReport:
         """Check the draft the customer would hear.
 
         Runs after the reply is composed rather than inside the graph, because
         the reply is written from the recommendation and does not exist yet when
         the output guardrails run.
         """
-        ctx = GuardrailContext(text="", reply=reply, journey=journey)
+        ctx = GuardrailContext(text="", reply=reply, journey=journey,
+                               account_refused=account_refused)
         report = GuardrailReport()
         for g in self.reply_guardrails:
             report.results.append(g.check(ctx))

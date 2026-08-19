@@ -16,7 +16,6 @@ from ..database.repository import (
     list_audit,
     list_evidence,
     list_pending,
-    update_approval,
     verify_chain,
 )
 from ..finance.taxonomy import (
@@ -296,71 +295,21 @@ def _financial_context_block(state: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 4. AI Guidance Panel
+# 4. Advisory Guidance
+#
+# Its own module — the panel shows the drafted reply, its grounding, the
+# obligations it was written under, and every guardrail result.
 # --------------------------------------------------------------------------- #
-def guidance_panel() -> None:
-    C.hero("AI Guidance Panel",
-           "Policy-grounded, advisory adaptations retrieved via RAG for each detection.")
-    text = st.text_area("Utterance to advise on",
-                        "I lost my job on Friday and I'm terrified about the mortgage.")
-    if st.button("Generate guidance", type="primary") and text.strip():
-        st.session_state["guide_state"] = process_turn("ADHOC", "", 0, "customer", text)
-    state = st.session_state.get("guide_state")
-    if state and state["decision"].recommendation:
-        _financial_context_block(state)
-        C.recommendation_card(state["decision"])
-        st.markdown("**Retrieved policy (RAG grounding)**")
-        for c in state.get("retrieved", []):
-            matched = " · journey-matched" if c.journey_match else ""
-            st.caption(f"`{c.policy_reference}` {c.title} — score {c.score}{matched}")
-        st.caption(
-            "Retrieval is filtered by vulnerability driver and re-ranked by banking "
-            "journey, so a bereaved customer settling an estate and a bereaved "
-            "customer reporting a scam get different clauses."
-        )
-    elif state:
-        st.info("No vulnerability signal detected — no guidance generated.")
-
-    st.divider()
-    st.markdown("**Recent guidance across the portfolio**")
-    df = _evidence_df()
-    if not df.empty:
-        g = df[df["recommendation"] != ""][
-            ["conversation_id", "risk_level", "recommendation", "citations",
-             "model_confidence", "approval_status"]
-        ].head(15)
-        st.dataframe(g, width="stretch")
+from .guidance import guidance_panel  # noqa: E402,F401  (re-exported as a page)
 
 
 # --------------------------------------------------------------------------- #
 # 5. Human Approval Queue
+#
+# Its own module — a queue a reviewer can actually decide from needs the routing
+# reasons, the situation, and an amend action, which outgrew a section here.
 # --------------------------------------------------------------------------- #
-def approval_queue() -> None:
-    C.hero("Human Approval Queue",
-           "High-risk or guardrail-flagged recommendations awaiting human sign-off.")
-    pending = list_pending()
-    if not pending:
-        st.success("No items are currently awaiting approval.")
-        return
-    reviewer = st.text_input("Reviewer name", "supervisor")
-    for rec in pending:
-        with st.container(border=True):
-            st.markdown(
-                f"{C.risk_pill(rec['risk_level'])} **{rec['conversation_id']}** · "
-                f"customer {rec['customer_id']} · drivers: {', '.join(rec['triggered_drivers'])}",
-                unsafe_allow_html=True,
-            )
-            st.write(rec["recommendation"])
-            st.caption(f"Citations: {', '.join(rec['citations'])} · "
-                       f"confidence {rec['model_confidence']:.2f}")
-            note = st.text_input("Decision note", key=f"note_{rec['record_id']}")
-            c1, c2, _ = st.columns([1, 1, 4])
-            if c1.button("Approve", key=f"ap_{rec['record_id']}"):
-                update_approval(rec["record_id"], "approved", reviewer, note)
-                st.rerun()
-            if c2.button("Reject", key=f"rj_{rec['record_id']}"):
-                update_approval(rec["record_id"], "rejected", reviewer, note)
-                st.rerun()
+from .approvals import approval_queue  # noqa: E402,F401  (re-exported as a page)
 
 
 # --------------------------------------------------------------------------- #

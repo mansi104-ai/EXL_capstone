@@ -34,6 +34,13 @@ Where a retrieved clause carries approved `Offer:` wording, that wording is used
 verbatim — a sentence a compliance reviewer signed off beats anything derived at
 runtime, and the derivation exists for clauses that have not been given one yet.
 
+When the caller has asked about their money, the answer leads: a customer who
+asked what they owe should hear the figure before they hear an offer. And when
+the Account Access agent has refused the request as somebody else's data, the
+refusal leads and is never softened into a maybe — followed immediately by the
+route that does exist, because a "no" with no next step is what makes a grieving
+customer call back angry.
+
 The composer runs whether or not an LLM is configured: with a model it builds
 the prompt and the model writes the reply; without one it composes the reply
 itself from the retrieved policy. Both paths are checked by the clarity
@@ -367,6 +374,33 @@ def _opener(context: Optional[FinancialContext], decision,
     return _NEUTRAL_OPENER
 
 
+def _overlaps(phrase: str, offers: list[str]) -> bool:
+    """Do these say substantially the same thing?"""
+    def keywords(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z]{4,}", text.lower())}
+
+    words = keywords(phrase)
+    if not words:
+        return False
+    return any(len(words & keywords(offer)) / len(words) >= 0.5 for offer in offers)
+
+
+def _state_facts(facts: list[str]) -> str:
+    """Read the ledger back as a sentence a person can follow.
+
+    The first fact names the account; the rest are the figures. Kept to two
+    figures — a customer cannot hold a read-out of their whole file.
+    """
+    if not facts:
+        return ""
+    account, figures = facts[0], facts[1:3]
+    if not figures:
+        return f"That's your {account}."
+    if len(figures) == 1:
+        return f"On your {account}, {figures[0]}."
+    return f"On your {account}, {figures[0]}, and {figures[1]}."
+
+
 def _join_offers(offers: list[str]) -> str:
     """One offer reads as a promise; two read as a choice. Three read as a menu,
     which is why the composer never returns three."""
@@ -413,7 +447,7 @@ def offers_for(decision, retrieved=None, limit: int = 2) -> tuple[list[str], lis
 
 def compose_reply(decision, context: Optional[FinancialContext] = None,
                   sentiment: Optional[SentimentReading] = None,
-                  retrieved=None) -> str:
+                  retrieved=None, account=None) -> str:
     """Build the handler's reply without a model.
 
     This is the path every demo runs on until an API key is configured, so it
@@ -425,6 +459,16 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
         return "Thanks for calling. How can I help you today?"
 
     opener = _opener(context, decision, sentiment)
+
+    # A refused data request is answered before anything else, and the refusal is
+    # stated as a fact rather than hedged.
+    if account is not None and getattr(account, "refused", False):
+        parts = [opener, account.refusal_reason]
+        if account.alternative:
+            parts.append(account.alternative.rstrip(".") + ".")
+        parts.append("Would that help?")
+        return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
+
     recommendation = decision.recommendation
 
     if recommendation is None or not recommendation.adaptations:
@@ -441,8 +485,22 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
     offers, reassurances = offers_for(decision, retrieved)
 
     parts = [opener]
+
+    # If they asked about their money, answer that first — an offer lands better
+    # once the customer knows what it is an offer about.
+    if account is not None and getattr(account, "decision", "none") in ("disclose", "partial"):
+        if account.facts:
+            parts.append(_state_facts(account.facts))
+        if account.refusal_reason:      # the "partial" case: masked, not withheld
+            parts.append(account.refusal_reason)
+
     if reassurances:
-        parts.append(reassurances[0].capitalize().rstrip(".") + ".")
+        # Only if it adds something. The essentials reassurance and the
+        # essentials offer are the same sentence twice, and saying it twice
+        # sounds like a script rather than a person.
+        reassurance = reassurances[0]
+        if not _overlaps(reassurance, offers):
+            parts.append(reassurance.capitalize().rstrip(".") + ".")
     if offers:
         parts.append(_join_offers(offers))
         parts.append("Would that help?")
@@ -459,7 +517,7 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
 def build_reply_prompt(customer_text: str, decision,
                        context: Optional[FinancialContext] = None,
                        sentiment: Optional[SentimentReading] = None,
-                       retrieved=None) -> str:
+                       retrieved=None, account=None) -> str:
     """Assemble the user message for the handler-reply model call.
 
     The policy is passed through the same plain-English pass the template path
@@ -477,6 +535,32 @@ def build_reply_prompt(customer_text: str, decision,
 
     lines = [
         f"The customer said: {customer_text}",
+    ]
+
+    # Account material comes first in the prompt as well as in the reply: it is
+    # the thing most likely to be dropped if it arrives last.
+    if account is not None and getattr(account, "asked", False):
+        lines.append("")
+        if account.refused:
+            lines += [
+                "THE CALLER HAS ASKED ABOUT SOMEBODY ELSE'S ACCOUNT. You must decline.",
+                f"Say, in your own warm words: {account.refusal_reason}",
+                "Do not give any figure, balance, number or detail from that account, "
+                "and do not say whether it exists. Do not soften the refusal into a "
+                "maybe, a 'let me check', or a promise to look into it.",
+            ]
+            if account.alternative:
+                lines.append(f"Then offer what you can do instead: {account.alternative}")
+        elif account.facts:
+            lines += [
+                "Account facts you may state (already masked — use them as written, "
+                "and never give a fuller number than this):",
+                *[f"- {fact}" for fact in account.facts],
+            ]
+            if account.refusal_reason:
+                lines.append(account.refusal_reason)
+
+    lines += [
         "",
         f"What policy allows you to do: {guidance}",
         "",

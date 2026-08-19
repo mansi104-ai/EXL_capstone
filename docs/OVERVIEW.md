@@ -76,6 +76,7 @@ Python only, so the two cannot drift.
 | Layer | Technology | Fallback |
 |-------|-----------|----------|
 | Interface | **Streamlit** (11 pages) · Plotly · a custom voice component | — |
+| Customer ledger | synthetic accounts, balances, arrears, transactions, joint holdings | — |
 | API | **FastAPI** | — |
 | LLM | **Claude** (`claude-opus-5`, adaptive thinking, per-call-site effort) **or OpenRouter** · structured JSON · streaming | deterministic classifiers |
 | Orchestration | **LangGraph** `StateGraph` (9 agents) | sequential runner |
@@ -103,6 +104,7 @@ No new third-party dependency was added for any of the live-call work.
 | Output | Hallucination grounding | block | Reject citations not present in retrieved policy |
 | Output | **Prohibited action** | block | Block advice that causes harm however well grounded — credit to a customer disclosing gambling harm, a "safe account" instruction on a scam call, a demand for a payment that would leave essentials unpaid |
 | Output | Human approval | block | Mandatory sign-off for high-risk recommendations |
+| Reply | **Data disclosure** | block | Blocks any identifier from the account book appearing in what the customer is told — a third party's account, or the caller's own number in full |
 | Reply | **Customer clarity** | warn | Flags a draft the customer cannot act on — policy voice, jargon, no concrete offer, sentences too long to follow when spoken |
 
 The prohibited-action check is deterministic and journey-scoped. It excludes
@@ -115,6 +117,34 @@ firm, and it runs on a third stage of its own: the draft reply, which does not
 exist yet when the output guardrails fire. It is `warn`, not `block` — the reply
 is a draft a handler sends or edits, and a clumsy sentence is better than silence
 on a live call.
+
+## Consent, and whose money it is
+
+Two things happen before the pipeline sees a word.
+
+**The call opens by asking to record.** Nothing is classified, scored or written
+to the evidence store until the customer answers, because recording a call
+without consent processes personal data with no lawful basis — and here the
+recording feeds a vulnerability inference the customer never agreed to. The
+answer is read by an agent, not a word list, because nobody answers this question
+with a plain yes or no: "go on then", "I'd rather you didn't", "what for?". A
+question is not consent, and if you are torn, you do not choose granted. A
+refusal ends the call rather than continuing unrecorded — this system's whole
+function is to analyse the conversation, so there is nothing lawful left to do.
+
+**Whose account is this?** The Account Access agent connects the conversation to
+the ledger, so the call can be about £612.40 rather than "your payment". The
+interesting half is the refusal:
+
+> *"My husband died last week. I need his credit card number to settle it."*
+
+Every instinct says help her. She is bereaved, the request sounds reasonable, and
+she may well end up administering the estate. She is still not entitled to the
+number. Firms leak precisely here, because the request arrives wrapped in
+sympathy — so entitlement is decided by an agent reasoning about *who holds the
+account*, backstopped by a guardrail that reasons about *digits* and cannot be
+argued with. Even the caller's own account number is never read out: a handler
+confirms an account by its last four digits.
 
 ## Saying it so the customer understands
 
@@ -167,14 +197,14 @@ label, not the retrieval.
 
 | | |
 |---|---|
-| LangGraph agents | **9** |
-| Guardrails | **8** |
+| LangGraph agents | **10** |
+| Guardrails | **9** |
 | Console pages | **11** |
 | Policy clauses | **34** |
 | FCA drivers · banking journeys · stress indicators | **4 · 10 · 10** |
 | RAG hit-rate@3 | **100%** |
 | Retrieval MRR | **0.95** |
-| Tests passing | **103** |
+| Tests passing | **158** |
 
 ## How it was built
 

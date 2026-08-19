@@ -151,6 +151,10 @@ class CaseDecision(BaseModel):
     channel: str = "chat"                       # "chat" | "voice"
     sentiment: Optional[SentimentReading] = None
     financial_context: Optional[dict[str, Any]] = None   # FinancialContext dump
+    # Why this turn was routed for approval, in the Supervisor's own words. A
+    # reviewer facing a queue needs to know what put each item in front of them;
+    # "high risk" and "the customer is in crisis" call for different attention.
+    routing_reasons: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=now_utc)
 
     @property

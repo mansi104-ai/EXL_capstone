@@ -59,9 +59,14 @@ class EvidenceRecord(Base):
     detection_source: Mapped[str] = mapped_column(String(32), default="heuristic")
 
     guardrails: Mapped[list] = mapped_column(JSON, default=list)
+    routing_reasons: Mapped[list] = mapped_column(JSON, default=list)
     approval_status: Mapped[str] = mapped_column(String(24), default="not_required")
     decided_by: Mapped[str] = mapped_column(String(64), default="")
     decision_note: Mapped[str] = mapped_column(Text, default="")
+    # What the reviewer changed it to. An approval queue offering only yes and no
+    # is a rubber stamp: in practice a supervisor's most common action is "nearly
+    # right, say it like this", and that edit is the audit-relevant artefact.
+    amended_recommendation: Mapped[str] = mapped_column(Text, default="")
 
     masked_text: Mapped[str] = mapped_column(Text, default="")
 

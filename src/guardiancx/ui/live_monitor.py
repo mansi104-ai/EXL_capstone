@@ -31,22 +31,32 @@ import streamlit as st
 
 from ..agents.graph import process_conversation, process_turn
 from ..agents.prompts import HANDLER_REPLY_SYSTEM
+from ..agents.consent import (
+    CONSENT_REQUEST,
+    ConsentState,
+    classify as classify_consent,
+    response_for as consent_response,
+)
 from ..agents.reply import build_reply_prompt, compose_reply
 from ..database.repository import (
     delete_saved_conversation,
     list_saved_conversations,
     save_conversation,
 )
+from ..finance.accounts import context_summary, list_customers
 from ..finance.taxonomy import JOURNEY_LABELS, PRODUCT_LABELS, STRESS_LABELS, Journey, Product
 from ..guardrails.manager import get_guardrail_manager
 from ..services.claude_client import EFFORT_REPLY, get_llm
 from ..services.speech import get_speech
 from ..services.synthetic_data import list_conversations
+from ..utils.logging import get_logger
 from ..utils.types import Driver, RiskLevel
 from ..voice import endpointing, prosody
 from ..voice.live_pii import LivePIIRedactor
 from . import components as C
 from .voice_console import voice_console
+
+log = get_logger("ui.live_monitor")
 
 # Opening lines that exercise a different journey each — the demo is more
 # convincing when the first thing a reviewer tries is not the only thing that
@@ -70,11 +80,12 @@ def _session() -> dict:
     return st.session_state["live"]
 
 
-def _reset_session() -> None:
+def _reset_session(customer_id: str = "") -> None:
     token = uuid.uuid4().hex[:6].upper()
+    callers = list_customers()
     st.session_state["live"] = {
         "conv_id": f"LIVE-{token}",
-        "customer_id": f"CUST-{token}",
+        "customer_id": customer_id or (callers[0].customer_id if callers else f"CUST-{token}"),
         "turns": [],          # {speaker, text, channel, voice, eou, redaction}
         "states": [],         # AgentState per turn
         "redactor": LivePIIRedactor(),
@@ -84,6 +95,11 @@ def _reset_session() -> None:
         "reply_id": "",
         "saved_at": "",
         "last_audio": None,
+        # The call opens by asking to record, and nothing is assessed until the
+        # customer answers. `asked_twice` tracks the one clarification we allow.
+        "consent": ConsentState.PENDING,
+        "consent_asked_twice": False,
+        "consent_rationale": "",
     }
 
 
@@ -117,31 +133,67 @@ def live_monitor() -> None:
 
     with left:
         _session_header(ss)
+        if ss["consent"] is ConsentState.REFUSED:
+            _refused_notice(ss)
+            return
         if mode == "Call":
             _call_controls(ss)
         _conversation(ss, mode)
 
     # The chat box is pinned to the window, so it lives outside the columns.
-    if mode == "Chat":
-        typed = st.chat_input("Type what the customer says…")
+    if mode == "Chat" and ss["consent"] is not ConsentState.REFUSED:
+        placeholder = ("Answer the recording question…"
+                       if ss["consent"] is not ConsentState.GRANTED
+                       else "Type what the customer says…")
+        typed = st.chat_input(placeholder)
         if typed and typed.strip():
             _customer_turn(ss, typed.strip(), channel="chat")
             st.rerun()
 
 
 def _session_header(ss: dict) -> None:
-    llm = get_llm()
+    callers = list_customers()
+    labels = {f"{c.name} · {c.customer_id}": c.customer_id for c in callers}
+    current = next((k for k, v in labels.items() if v == ss["customer_id"]), None)
+
     c1, c2, c3 = st.columns([2, 1, 1])
-    c1.caption(f"Conversation **{ss['conv_id']}** · customer **{ss['customer_id']}** · "
-               f"agent model {llm.provider_label}")
+    with c1:
+        chosen = st.selectbox(
+            "Caller", list(labels),
+            index=list(labels).index(current) if current else 0,
+            help="Who is on the line. Their accounts are what the agents reason about.",
+        )
+        if labels[chosen] != ss["customer_id"] and not ss["turns"]:
+            ss["customer_id"] = labels[chosen]
     if c2.button("Save to library", width="stretch", disabled=not ss["turns"]):
         _save(ss)
     if c3.button("New conversation", width="stretch"):
-        _reset_session()
+        _reset_session(ss["customer_id"])
         st.rerun()
+
+    st.caption(f"Call reference {ss['conv_id']}")
+    with st.expander("What we hold for this caller"):
+        st.code(context_summary(ss["customer_id"]), language="text")
+        st.caption("Everything here is masked before it reaches the agents, the "
+                   "transcript or the evidence record.")
     if ss["saved_at"]:
         st.caption(f"Saved to the conversation library at {ss['saved_at']} — "
                    "it now appears under Library, Customer Timeline and Analytics.")
+
+
+def _refused_notice(ss: dict) -> None:
+    """The call ended because the customer declined to be recorded."""
+    for turn in ss["turns"]:
+        _render_turn(turn, {})
+    st.error(
+        "**Call ended — the customer did not consent to being recorded.**  \n"
+        "Nothing about this conversation was assessed, and no evidence record was "
+        "written. This system analyses what is said, so without consent there is "
+        "nothing lawful for it to do."
+    )
+    if st.button("Start a new call", type="primary"):
+        _reset_session(ss["customer_id"])
+        st.rerun()
 
 
 # --------------------------------------------------------------------------- #
@@ -156,13 +208,13 @@ def _call_controls(ss: dict) -> None:
         try:
             token, region = speech.issue_token()
         except Exception as exc:  # noqa: BLE001
-            st.warning(f"Azure Speech token could not be issued — falling back to the "
-                       f"browser's own recogniser. ({exc})")
+            st.warning("Speech recognition is unavailable, so the call will use the "
+                       "browser's built-in recogniser instead.")
+            log.info("Speech token could not be issued: %s", exc)
     else:
         st.info(
-            "Azure Speech is not configured, so the call will use the browser's built-in "
-            "recogniser (Chrome or Edge) and there will be no spoken reply. "
-            f"{status['reason']}"
+            "Speech services are not configured, so the call will use the browser's "
+            "built-in recogniser (Chrome or Edge) and the reply will be text only."
         )
 
     result = voice_console(
@@ -206,7 +258,8 @@ def _call_controls(ss: dict) -> None:
 def _push_to_talk(ss: dict, data: bytes) -> None:
     speech = get_speech()
     if not speech.available:
-        st.warning("Azure Speech is not configured, so this recording cannot be transcribed.")
+        st.warning("Speech services are not configured, so this recording cannot be "
+                   "transcribed.")
         return
     try:
         with st.spinner("Transcribing…"):
@@ -230,6 +283,14 @@ def _customer_turn(ss: dict, raw_text: str, channel: str,
                    silence_ms: int = 0) -> None:
     """Take one customer utterance through redaction, endpointing and the graph."""
     voice = voice or prosody.empty()
+
+    # Until consent is given, the only thing the customer's words are used for is
+    # deciding whether they consented. Nothing is classified, nothing is scored,
+    # and no evidence record is written — running the pipeline first and asking
+    # afterwards would be the exact thing consent is supposed to prevent.
+    if ss["consent"] is not ConsentState.GRANTED:
+        _consent_turn(ss, raw_text, channel)
+        return
 
     # Redaction runs first, on the way in. Everything downstream — the agents, the
     # evidence record, the screen — sees only the redacted text.
@@ -261,6 +322,51 @@ def _customer_turn(ss: dict, raw_text: str, channel: str,
     ss["saved_at"] = ""
 
 
+def _consent_turn(ss: dict, raw_text: str, channel: str) -> None:
+    """Handle the customer's answer to the recording request."""
+    decision = classify_consent(raw_text)
+    ss["consent"] = decision.state
+    ss["consent_rationale"] = decision.rationale
+
+    ss["turns"].append({
+        "speaker": "customer", "text": raw_text, "channel": channel,
+        "voice": None, "eou": None, "redaction": None,
+        "consent": decision.model_dump(mode="json"),
+    })
+    ss["states"].append({})
+
+    reply = consent_response(decision, ss["consent_asked_twice"])
+    if decision.state is ConsentState.UNCLEAR:
+        # A second unclear answer is treated as a refusal by `response_for`;
+        # reflect that here so the call actually ends.
+        if ss["consent_asked_twice"]:
+            ss["consent"] = ConsentState.REFUSED
+        ss["consent_asked_twice"] = True
+
+    if reply:
+        ss["turns"].append({
+            "speaker": "agent", "text": reply, "channel": channel,
+            "voice": None, "eou": None, "redaction": None, "clarity": [],
+        })
+        ss["states"].append({})
+        if channel == "voice":
+            _speak(ss, reply)
+
+
+def _speak(ss: dict, text: str) -> None:
+    """Synthesise a line for playback on the call channel."""
+    speech = get_speech()
+    if not speech.available:
+        return
+    try:
+        audio = speech.synthesize(text, emotion=_current_emotion(ss))
+    except Exception:  # noqa: BLE001
+        return
+    if audio:
+        ss["reply_audio"] = audio
+        ss["reply_id"] = uuid.uuid4().hex[:12]
+
+
 def _reply_stream(ss: dict) -> Iterator[str]:
     """Yield the handler's draft reply as the model produces it."""
     pending = ss["pending"]
@@ -277,6 +383,7 @@ def _reply_stream(ss: dict) -> Iterator[str]:
             context=state.get("financial_context"),
             sentiment=state.get("sentiment"),
             retrieved=state.get("retrieved"),
+            account=state.get("account_request"),
         )
         produced = False
         for chunk in llm.stream_text(HANDLER_REPLY_SYSTEM, user,
@@ -290,7 +397,8 @@ def _reply_stream(ss: dict) -> Iterator[str]:
     # ourselves, released a sentence at a time so the channel behaves the same
     # way. This is the path every demo runs on until a key is configured.
     composed = compose_reply(decision, state.get("financial_context"),
-                             state.get("sentiment"), retrieved=state.get("retrieved"))
+                             state.get("sentiment"), retrieved=state.get("retrieved"),
+                             account=state.get("account_request"))
     for sentence in composed.split(". "):
         if sentence:
             yield sentence.rstrip(".") + ". "
@@ -313,9 +421,14 @@ def _finalise_reply(ss: dict, reply: str) -> None:
     # Check the draft the customer would actually hear. Correct advice phrased in
     # policy language is still advice they cannot act on, so this runs on every
     # reply whether it came from the model or the composer.
-    context = ss["states"][-2].get("financial_context") if len(ss["states"]) >= 2 else None
+    previous = ss["states"][-2] if len(ss["states"]) >= 2 else {}
+    context = previous.get("financial_context")
+    account = previous.get("account_request")
     clarity = get_guardrail_manager().run_reply(
-        reply, journey=context.journey if context else None)
+        reply,
+        journey=context.journey if context else None,
+        account_refused=bool(account is not None and getattr(account, "refused", False)),
+    )
 
     ss["turns"].append({"speaker": "agent", "text": reply, "channel": pending["channel"],
                         "voice": None, "eou": None, "redaction": None,
@@ -345,11 +458,22 @@ def _finalise_reply(ss: dict, reply: str) -> None:
 # Conversation rendering
 # --------------------------------------------------------------------------- #
 def _conversation(ss: dict, mode: str) -> None:
+    # The call always opens the same way: the handler asks to record, and waits.
+    if ss["consent"] is not ConsentState.GRANTED:
+        with st.chat_message("assistant"):
+            st.markdown(f"**Handler:** {CONSENT_REQUEST}")
+        for turn, state in zip(ss["turns"], ss["states"]):
+            _render_turn(turn, state)
+        if ss["consent"] is ConsentState.UNCLEAR:
+            st.info("The customer has not answered yes or no yet — the handler asks "
+                    "once more, plainly. A question is not consent.")
+        else:
+            st.caption("Nothing is assessed until the customer answers. Try “yes, "
+                       "that's fine”, “I'd rather you didn't”, or “what for?”.")
+        return
+
     if not ss["turns"] and not ss["pending"]:
-        st.info(
-            "Start the conversation. On **Call**, press *Start call* and speak; on "
-            "**Chat**, type below. Try one of these:"
-        )
+        st.info("Consent given — the conversation can begin. Try one of these:")
         for example in _EXAMPLES[:3]:
             st.markdown(f"- *“{example}”*")
         return
@@ -373,6 +497,7 @@ def _render_turn(turn: dict, state: dict) -> None:
         st.markdown(f"**{label}{icon}:** {turn['text']}")
 
         if turn["speaker"] == "customer":
+            _consent_signal(turn)
             _turn_signals(turn)
         else:
             _reply_signals(turn)
@@ -417,6 +542,17 @@ def _turn_signals(turn: dict) -> None:
 
     if bits:
         st.caption("  ·  ".join(bits))
+
+
+def _consent_signal(turn: dict) -> None:
+    """Show how the customer's answer to the recording request was read."""
+    consent = turn.get("consent")
+    if not consent:
+        return
+    state = consent.get("state", "")
+    mark = {"granted": "Consent given", "refused": "Consent refused",
+            "unclear": "Answer unclear"}.get(state, state)
+    st.caption(f"{mark} — {consent.get('rationale', '')} [{consent.get('source', '')}]")
 
 
 def _reply_signals(turn: dict) -> None:

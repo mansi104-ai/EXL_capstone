@@ -9,6 +9,10 @@ raises and that the signals actually reach the screen.
 `AppTest` runs the page headlessly. The voice component's JavaScript does not
 execute under it, so the call channel is exercised as far as the component
 boundary and the chat channel carries the full turn.
+
+Every conversation test consents first, because the console now opens by asking
+to record and assesses nothing until the customer answers. `_consented` is that
+step; the gate itself is tested in `test_accounts.py`.
 """
 from __future__ import annotations
 
@@ -20,8 +24,17 @@ PAGE = str(Path(__file__).parent / "live_monitor_page.py")
 
 
 def _app() -> AppTest:
-    app = AppTest.from_file(PAGE, default_timeout=180)
+    app = AppTest.from_file(PAGE, default_timeout=240)
     app.run()
+    assert not app.exception, [e.value for e in app.exception]
+    return app
+
+
+def _consented() -> AppTest:
+    """A chat session past the recording question, ready for the conversation."""
+    app = _app()
+    app.radio[0].set_value("Chat").run()
+    app.chat_input[0].set_value("Yes, that's fine.").run()
     assert not app.exception, [e.value for e in app.exception]
     return app
 
@@ -35,9 +48,7 @@ def test_page_renders_on_every_channel():
 
 
 def test_chat_turn_runs_the_pipeline_and_fills_the_rail():
-    app = _app()
-    app.radio[0].set_value("Chat").run()
-
+    app = _consented()
     app.chat_input[0].set_value(
         "My husband passed away last month and I'm three months behind on the mortgage."
     ).run()
@@ -45,30 +56,30 @@ def test_chat_turn_runs_the_pipeline_and_fills_the_rail():
 
     live = app.session_state["live"]
     # The customer turn, then the streamed handler reply, both recorded.
-    assert len(live["turns"]) == 2
-    assert live["turns"][0]["speaker"] == "customer"
-    assert live["turns"][1]["speaker"] == "agent"
-    assert live["turns"][1]["text"]
+    turns = [t for t in live["turns"] if not t.get("consent")]
+    assert turns[-2]["speaker"] == "customer"
+    assert turns[-1]["speaker"] == "agent"
+    assert turns[-1]["text"]
 
-    state = live["states"][0]
+    state = next(s for s in live["states"] if s)
     assert state["financial_context"].journey.value == "bereavement_estate"
     assert state["decision"].risk_level.value == "high"
     assert state["decision"].approval_status.value == "pending"
 
     # The endpointing model ran on the typed turn too.
-    assert live["turns"][0]["eou"]["completeness"] > 0
+    assert turns[-2]["eou"]["completeness"] > 0
 
 
 def test_disclosed_pii_never_reaches_the_transcript():
-    app = _app()
-    app.radio[0].set_value("Chat").run()
+    app = _consented()
     app.chat_input[0].set_value(
         "I can't pay this month — my sort code is 09-01-22 and my email is jane@example.com"
     ).run()
     assert not app.exception, [e.value for e in app.exception]
 
     live = app.session_state["live"]
-    stored = live["turns"][0]["text"]
+    stored = next(t for t in live["turns"]
+                  if t["speaker"] == "customer" and not t.get("consent"))["text"]
     assert "09-01-22" not in stored
     assert "jane@example.com" not in stored
     assert "REDACTED" in stored
@@ -81,8 +92,7 @@ def test_saving_puts_the_session_in_the_library():
         get_saved_conversation,
     )
 
-    app = _app()
-    app.radio[0].set_value("Chat").run()
+    app = _consented()
     app.chat_input[0].set_value("I lost my job and I can't make this payment.").run()
     assert not app.exception, [e.value for e in app.exception]
 
@@ -102,8 +112,7 @@ def test_saving_puts_the_session_in_the_library():
 
 
 def test_new_conversation_clears_the_session():
-    app = _app()
-    app.radio[0].set_value("Chat").run()
+    app = _consented()
     app.chat_input[0].set_value("I'm behind on my credit card.").run()
     first_id = app.session_state["live"]["conv_id"]
     assert app.session_state["live"]["turns"]
