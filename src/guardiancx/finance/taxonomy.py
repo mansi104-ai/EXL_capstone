@@ -1,16 +1,18 @@
 """The finance domain taxonomy.
 
 A general-purpose vulnerability classifier can tell you *that* a customer is
-struggling. It cannot tell you that a customer who is three payments behind on a
-regulated credit agreement, choosing between the mortgage and the electricity
-bill, has just triggered CONC 7.3's forbearance duty — and that offering them a
-consolidation loan would be a Consumer Duty breach.
+struggling. It cannot tell you that a customer three EMIs behind on a home loan,
+choosing between the electricity bill and the instalment, is owed forbearance
+under the RBI Fair Practices Code — and that a recovery call to them after 7pm,
+or an offer of a top-up loan, would breach it.
 
 That gap is the niche. This module encodes it in four parts:
 
 * **Product** — what the customer holds, because the obligations differ. A
-  credit card sits under CONC; a current account under BCOBS; a mortgage under
-  MCOB. The same disclosure means different things against each.
+  credit card sits under the RBI Master Direction on Credit and Debit Cards; a
+  savings account under the Master Circular on Customer Service; a home loan
+  under the Fair Practices Code. The same disclosure means different things
+  against each.
 * **Journey** — what the conversation is *for*. Harm concentrates in a handful
   of journeys (collections, bereavement, scam, forbearance), and the journey is
   a far better retrieval key than the raw utterance.
@@ -21,6 +23,15 @@ That gap is the niche. This module encodes it in four parts:
   the intersection is where the firm must act.
 * **The regulatory map** — journey → the rules that bite, so that every piece of
   guidance can be traced to an obligation rather than to a tone of voice.
+
+A note on the four drivers. Health, life events, resilience and capability are
+not an RBI construct — they come from the UK regulator's vulnerability guidance,
+which is the most fully worked-out articulation of the idea anywhere. Pan Indian
+Bank adopts them as **its own** framework for identifying customers at risk, and
+grounds the *obligations* that follow in Indian instruments: the RBI Charter of
+Customer Rights, the Fair Practices Code, the Master Circular on Customer
+Service, and the Integrated Ombudsman Scheme. That split is deliberate and worth
+being explicit about: the taxonomy is the bank's, the duties are the regulator's.
 
 Everything here is deterministic and inspectable. The LLM classifier in
 `agents/financial_context_agent.py` proposes; this taxonomy defines the
@@ -56,26 +67,26 @@ PRODUCT_LABELS: dict[Product, str] = {
     Product.SAVINGS: "Savings",
     Product.CREDIT_CARD: "Credit card",
     Product.PERSONAL_LOAN: "Personal loan",
-    Product.MORTGAGE: "Mortgage",
+    Product.MORTGAGE: "Home loan",
     Product.OVERDRAFT: "Overdraft",
-    Product.CAR_FINANCE: "Car finance",
+    Product.CAR_FINANCE: "Vehicle loan",
     Product.PENSION: "Pension",
     Product.INSURANCE: "Insurance",
     Product.UNKNOWN: "Not yet identified",
 }
 
-# The sourcebook that governs each product, shown in the guidance panel so a
+# The RBI instrument that governs each product, shown in the guidance panel so a
 # handler can see which rulebook the advice is grounded in.
 PRODUCT_SOURCEBOOK: dict[Product, str] = {
-    Product.CURRENT_ACCOUNT: "BCOBS",
-    Product.SAVINGS: "BCOBS",
-    Product.CREDIT_CARD: "CONC",
-    Product.PERSONAL_LOAN: "CONC",
-    Product.MORTGAGE: "MCOB",
-    Product.OVERDRAFT: "CONC / BCOBS",
-    Product.CAR_FINANCE: "CONC",
-    Product.PENSION: "COBS",
-    Product.INSURANCE: "ICOBS",
+    Product.CURRENT_ACCOUNT: "Master Circular on Customer Service",
+    Product.SAVINGS: "Master Circular on Customer Service",
+    Product.CREDIT_CARD: "MD on Credit & Debit Cards",
+    Product.PERSONAL_LOAN: "Fair Practices Code",
+    Product.MORTGAGE: "Fair Practices Code (home loans)",
+    Product.OVERDRAFT: "Master Circular on Customer Service",
+    Product.CAR_FINANCE: "Fair Practices Code",
+    Product.PENSION: "Master Circular on Customer Service",
+    Product.INSURANCE: "IRDAI Protection of Policyholders' Interests",
     Product.UNKNOWN: "—",
 }
 
@@ -165,42 +176,49 @@ ACUTE_STRESS: set[StressIndicator] = {
 # --------------------------------------------------------------------------- #
 REGULATORY_MAP: dict[Journey, list[str]] = {
     Journey.ARREARS_COLLECTIONS: [
-        "CONC 7.3 — arrears, default and recovery: due consideration and forbearance",
-        "Consumer Duty PRIN 2A.6 — consumer support outcome",
+        "RBI Fair Practices Code — no coercive recovery; contact only between "
+        "08:00 and 19:00",
+        "RBI Master Direction on Outsourcing — conduct of recovery agents",
+        "RBI Charter of Customer Rights — Right to Fair Treatment",
     ],
     Journey.FORBEARANCE_REQUEST: [
-        "CONC 7.3.4 — forbearance and due consideration",
-        "Debt Respite Scheme (Breathing Space) Regulations 2020",
+        "RBI Fair Practices Code — restructuring and relief where hardship is genuine",
+        "RBI Resolution Framework for stressed personal loans",
     ],
     Journey.BEREAVEMENT_ESTATE: [
-        "FCA FG21/1 — fair treatment of vulnerable customers",
-        "BCOBS 5 — post-sale requirements and bereavement handling",
+        "RBI settlement of claims of deceased depositors — simplified procedure, "
+        "settlement within 15 days of a complete claim",
+        "RBI Master Circular on Customer Service — nomination and survivorship",
     ],
     Journey.FRAUD_SCAM: [
-        "PSR APP fraud reimbursement requirement",
-        "FCA FG21/1 — heightened susceptibility to scams",
+        "RBI limiting customer liability in unauthorised electronic transactions "
+        "(2017) — zero liability where the customer reports promptly",
+        "RBI Charter of Customer Rights — Right to Privacy",
     ],
     Journey.AFFORDABILITY_SHOCK: [
-        "CONC 5 — responsible lending and creditworthiness",
-        "Consumer Duty PRIN 2A.6 — avoid foreseeable harm",
+        "RBI Fair Practices Code — assess repayment capacity before lending",
+        "RBI Charter of Customer Rights — Right to Suitability",
     ],
     Journey.GAMBLING_HARM: [
-        "FCA FG21/1 — addiction as a health driver",
-        "CONC 2.10 — mental capacity and credit decisions",
+        "RBI Charter of Customer Rights — Right to Suitability",
+        "Pan Indian Bank vulnerable-customer framework — addiction as a health driver",
     ],
     Journey.THIRD_PARTY_ACCESS: [
-        "Mental Capacity Act 2005 — capacity and lasting power of attorney",
-        "BCOBS 5 — third-party mandates on accounts",
+        "RBI Master Circular on Customer Service — mandates, nomination and "
+        "operation by a third party",
+        "Rights of Persons with Disabilities Act 2016 — reasonable accommodation",
     ],
     Journey.PRODUCT_SALE: [
-        "Consumer Duty PRIN 2A.3 — products and services outcome",
-        "Consumer Duty PRIN 2A.5 — consumer understanding outcome",
+        "RBI Charter of Customer Rights — Right to Suitability",
+        "RBI Fair Practices Code — no mis-selling or bundled products",
     ],
     Journey.COMPLAINT: [
-        "DISP 1 — complaint handling",
+        "RBI Integrated Ombudsman Scheme 2021 — internal redress within 30 days",
+        "RBI Charter of Customer Rights — Right to Grievance Redress",
     ],
     Journey.GENERAL_SERVICING: [
-        "Consumer Duty PRIN 2A.6 — consumer support outcome",
+        "RBI Master Circular on Customer Service",
+        "RBI Charter of Customer Rights — Right to Fair Treatment",
     ],
 }
 
@@ -212,12 +230,14 @@ PROHIBITED_ACTIONS: dict[Journey, list[str]] = {
         "offering additional credit, a limit increase, or a new credit product",
     ],
     Journey.AFFORDABILITY_SHOCK: [
-        "offering a consolidation loan or further borrowing as the first remedy",
+        "offering a top-up loan or further borrowing as the first remedy",
         "pressing for a payment that would leave essential bills unpaid",
     ],
     Journey.ARREARS_COLLECTIONS: [
-        "threatening enforcement or default while a forbearance review is open",
+        "threatening legal action or recovery agents while a relief review is open",
         "pressing for a payment that would leave essential bills unpaid",
+        "calling outside 08:00–19:00, or contacting the customer's relatives or "
+        "employer about the debt",
     ],
     Journey.BEREAVEMENT_ESTATE: [
         "requiring the customer to repeat the bereavement to another team",
@@ -281,16 +301,17 @@ class FinancialContext(BaseModel):
 # "behind on my payments" is an arrears disclosure.
 # --------------------------------------------------------------------------- #
 _PRODUCT_PATTERNS: list[tuple[Product, list[str]]] = [
-    (Product.MORTGAGE, ["mortgage", "remortgage", "home loan"]),
+    (Product.MORTGAGE, ["home loan", "housing loan", "mortgage", "griha"]),
     (Product.CREDIT_CARD, ["credit card", "my card", "card balance", "minimum payment"]),
     (Product.PERSONAL_LOAN, ["personal loan", "the loan", "loan payment", "loan agreement"]),
     (Product.OVERDRAFT, ["overdraft", "overdrawn"]),
-    (Product.CAR_FINANCE, ["car finance", "pcp", "hire purchase", "car loan"]),
-    (Product.SAVINGS, ["savings account", "isa", "my savings"]),
+    (Product.CAR_FINANCE, ["vehicle loan", "car loan", "two wheeler loan", "bike loan"]),
+    (Product.SAVINGS, ["savings account", "fixed deposit", "recurring deposit",
+                       "my savings", "fd"]),
     (Product.PENSION, ["pension", "annuity", "drawdown"]),
     (Product.INSURANCE, ["insurance", "policy claim", "life cover"]),
-    (Product.CURRENT_ACCOUNT, ["current account", "direct debit", "standing order",
-                               "my account", "balance"]),
+    (Product.CURRENT_ACCOUNT, ["current account", "savings account", "auto debit",
+                               "standing instruction", "my account", "balance", "upi"]),
 ]
 
 _JOURNEY_PATTERNS: list[tuple[Journey, list[str]]] = [
@@ -303,19 +324,21 @@ _JOURNEY_PATTERNS: list[tuple[Journey, list[str]]] = [
     (Journey.THIRD_PARTY_ACCESS, ["power of attorney", "attorney", "carer", "trusted person",
                                   "third party", "my daughter helps", "my son helps",
                                   "helps me with"]),
-    (Journey.FORBEARANCE_REQUEST, ["payment holiday", "payment break", "pause my payments",
-                                   "reduce my payments", "breathing space", "payment plan",
-                                   "arrangement to pay", "freeze the interest"]),
+    (Journey.FORBEARANCE_REQUEST, ["moratorium", "payment holiday", "pause my emi",
+                                   "reduce my emi", "restructure", "payment plan",
+                                   "arrangement to pay", "waive the interest",
+                                   "reschedule", "more time to pay"]),
     (Journey.ARREARS_COLLECTIONS, ["behind on", "behind with", "missed a payment",
-                                   "missed payments", "in arrears", "arrears", "default notice",
-                                   "collections", "debt collector", "chasing me"]),
+                                   "missed payments", "missed emi", "in arrears", "arrears",
+                                   "overdue", "default notice", "recovery agent",
+                                   "collection agent", "chasing me", "keep calling me"]),
     (Journey.AFFORDABILITY_SHOCK, ["lost my job", "made redundant", "redundant", "can't afford",
                                    "cannot afford", "hours were cut", "no income",
                                    "money for food", "struggling to pay", "money is tight",
                                    "money's tight"]),
     (Journey.COMPLAINT, ["complain", "complaint", "ombudsman", "unacceptable"]),
     (Journey.PRODUCT_SALE, ["apply for", "new card", "increase my limit", "borrow more",
-                            "consolidat", "switch to"]),
+                            "top-up loan", "top up loan", "switch to", "pre-approved"]),
 ]
 
 # Regex rather than substring, because people do not speak in canonical phrases.
@@ -323,29 +346,31 @@ _JOURNEY_PATTERNS: list[tuple[Journey, list[str]]] = [
 # describe arrears and none of them contain the phrase "in arrears".
 _STRESS_PATTERNS: list[tuple[StressIndicator, str]] = [
     (StressIndicator.MISSED_PAYMENT,
-     r"missed\s+(?:\w+\s+){0,2}payments?|didn'?t\s+pay|late\s+(?:with\s+)?payments?"
-     r"|payment\s+(?:didn'?t|bounced|failed)"),
+     r"missed\s+(?:\w+\s+){0,2}(?:payments?|emis?)|didn'?t\s+pay"
+     r"|late\s+(?:with\s+)?(?:payments?|emis?)"
+     r"|(?:payment|emi|cheque)\s+(?:didn'?t|bounced|failed|returned)"),
     (StressIndicator.ARREARS,
-     r"\barrears\b|behind\s+(?:on|with)\b|payments?\s+behind|default\s+notice"
-     r"|fallen\s+behind"),
+     r"\barrears\b|\boverdue\b|behind\s+(?:on|with)\b|(?:payments?|emis?)\s+behind"
+     r"|default\s+notice|fallen\s+behind|\bnpa\b|recovery\s+agent"),
     (StressIndicator.ESSENTIAL_SPEND_CONFLICT,
-     r"money\s+for\s+food|heat\s+or\s+eat|can'?t\s+(?:feed|afford\s+to\s+eat)"
-     r"|choos(?:e|ing)\s+between|keep\s+the\s+(?:lights|heating)\s+on"
-     r"|(?:rent|mortgage|electric\w*|gas|council\s+tax)\s+or\s+(?:the\s+)?\w+"
-     r"|no\s+money\s+for"),
+     r"money\s+for\s+food|can'?t\s+(?:feed|afford\s+to\s+eat)"
+     r"|choos(?:e|ing)\s+between|keep\s+the\s+lights\s+on"
+     r"|(?:rent|emi|electric\w*|gas|school\s+fees|medical)\s+or\s+(?:the\s+)?\w+"
+     r"|no\s+money\s+for|ration"),
     (StressIndicator.NO_SAVINGS_BUFFER,
      r"no\s+savings|nothing\s+(?:put\s+by|saved|left)|no\s+buffer|nothing\s+to\s+fall\s+back"),
     (StressIndicator.OVER_INDEBTEDNESS,
      r"too\s+much\s+debt|\bdebts\b|multiple\s+(?:loans|cards)|maxed\s+(?:out|the)"
      r"|robbing\s+peter"),
     (StressIndicator.BENEFIT_RELIANCE,
-     r"universal\s+credit|\bbenefits\b|\bpip\b|\besa\b|pension\s+credit"
-     r"|disability\s+allowance"),
+     r"\bpension\b|widow\s+pension|ration\s+card|\bmnrega\b|government\s+scheme"
+     r"|disability\s+(?:pension|allowance)|\bsubsidy\b"),
     (StressIndicator.INCOME_SHOCK,
      r"lost\s+my\s+job|made\s+redundant|\bredundant\b|hours\s+(?:were\s+)?cut"
      r"|sick\s+pay|no\s+income|income\s+(?:has\s+)?(?:dropped|fallen)|laid\s+off"),
     (StressIndicator.HIGH_COST_CREDIT,
-     r"payday\s+loan|doorstep\s+lender|buy\s+now\s+pay\s+later|klarna|log\s?book\s+loan"),
+     r"money\s?lender|sahukar|chit\s+fund|gold\s+loan|instant\s+loan\s+app"
+     r"|buy\s+now\s+pay\s+later|loan\s+app"),
     (StressIndicator.SCAM_EXPOSURE,
      r"scam\w*|fraud\w*|safe\s+account|someone\s+took|phishing|didn'?t\s+authorise"),
     (StressIndicator.GAMBLING_SPEND,
@@ -365,7 +390,9 @@ _ARREARS_MONTHS = [
 _WORD_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                  "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
-_MONEY = re.compile(r"£\s?\d[\d,]*(?:\.\d{2})?")
+_MONEY = re.compile(r"(?:₹|rs\.?|inr)\s?\d[\d,]*(?:\.\d{1,2})?"
+                    r"|\d[\d,]*(?:\.\d+)?\s*(?:lakh|lakhs|crore|crores|thousand)",
+                    re.IGNORECASE)
 
 
 def _matches(low: str, phrases: list[str]) -> int:

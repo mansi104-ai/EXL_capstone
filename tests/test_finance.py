@@ -59,8 +59,13 @@ def test_arrears_are_counted_in_both_phrasings():
 
 
 def test_monetary_amounts_are_extracted():
-    context = classify_heuristic("I owe £1,240.50 and can only pay £50 this month.")
-    assert "£1,240.50" in context.monetary_amounts
+    context = classify_heuristic("I owe ₹1,24,050 and can only pay ₹5,000 this month.")
+    assert "₹1,24,050" in context.monetary_amounts
+
+
+def test_indian_number_words_are_extracted():
+    context = classify_heuristic("The loan is about 28 lakh and I've paid 2 lakh already.")
+    assert any("lakh" in a for a in context.monetary_amounts)
 
 
 # --------------------------------------------------------------------------- #

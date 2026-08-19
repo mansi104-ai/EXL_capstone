@@ -10,7 +10,10 @@ def test_pii_masks_email_and_card():
     masked, counts = mask_pii("email me a@b.com card 4921 5544 1122 3344")
     assert "a@b.com" not in masked
     assert counts.get("email") == 1
+    # The whole card, not the first twelve digits of it: Aadhaar is exactly
+    # twelve, so an ordering slip here leaves four digits of a card in the clear.
     assert counts.get("card") == 1
+    assert "3344" not in masked
 
 
 def test_injection_blocks_override():

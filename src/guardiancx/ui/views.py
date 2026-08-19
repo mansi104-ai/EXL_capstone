@@ -18,6 +18,7 @@ from ..database.repository import (
     list_pending,
     verify_chain,
 )
+from ..finance.accounts import context_summary, list_customers
 from ..finance.taxonomy import (
     ACUTE_STRESS,
     HIGH_HARM_JOURNEYS,
@@ -230,10 +231,13 @@ from .live_monitor import live_monitor  # noqa: E402,F401  (re-exported as a pag
 def detection() -> None:
     C.hero("Vulnerability Detection",
            "Classify an utterance across the four regulatory drivers (advisory only).")
+    callers = {f"{c.name} · {c.customer_id}": c.customer_id for c in list_customers()}
+    caller = st.selectbox("Caller", list(callers),
+                          help="The assessment reads their account context too.")
     text = st.text_area("Customer utterance",
-                        "My husband passed away last month and I can't afford the payment.")
+                        "My husband passed away last month and I can't pay this month's EMI.")
     if st.button("Assess", type="primary") and text.strip():
-        state = process_turn("ADHOC", "", 0, "customer", text)
+        state = process_turn("ADHOC", callers[caller], 0, "customer", text)
         st.session_state["detect_state"] = state
     state = st.session_state.get("detect_state")
     if state:
@@ -399,12 +403,19 @@ def audit_trail() -> None:
 # --------------------------------------------------------------------------- #
 def customer_timeline_page() -> None:
     C.hero("Customer Timeline", "Every recorded interaction and decision for one customer.")
-    customers = {f"{c['customer_id']} — {c['customer_name']}": c["customer_id"]
-                 for c in list_conversations()}
+    # Drawn from the customer ledger rather than the seeded conversations, so a
+    # caller who has only ever appeared in a live session still has a timeline.
+    customers = {f"{c.name} · {c.customer_id}": c.customer_id for c in list_customers()}
     choice = st.selectbox("Customer", list(customers))
-    rows = customer_timeline(customers[choice])
+    customer_id = customers[choice]
+
+    with st.expander("Account on file"):
+        st.code(context_summary(customer_id), language="text")
+
+    rows = customer_timeline(customer_id)
     if not rows:
-        st.info("No records for this customer yet — run their conversation first.")
+        st.info("No recorded interactions for this customer yet — run a call on the "
+                "Live Conversation Monitor, or replay a seeded conversation.")
         return
     for r in rows:
         with st.container(border=True):

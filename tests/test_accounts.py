@@ -190,10 +190,10 @@ def test_a_reply_that_actually_declines_passes():
     assert result.passed
 
 
-def test_an_email_or_postcode_read_back_is_blocked():
+def test_an_email_or_pan_read_back_is_blocked():
     customer = get_customer(WIDOW)
     assert not _check(f"I'll send it to {customer.email}.").passed
-    assert not _check(f"You're at {customer.postcode}, aren't you?").passed
+    assert not _check(f"Your PAN is {customer.pan}, correct?").passed
 
 
 # --------------------------------------------------------------------------- #
@@ -283,6 +283,7 @@ def test_refusing_ends_the_call():
     app.chat_input[0].set_value("No, I'd rather you didn't.").run()
     assert not app.exception, [e.value for e in app.exception]
     assert app.session_state["live"]["consent"] is ConsentState.REFUSED
+    assert app.session_state["live"]["ended"]
     assert any("did not consent" in str(e.value).lower() for e in app.error)
 
 

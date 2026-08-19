@@ -52,6 +52,7 @@ import re
 from typing import Optional
 
 from ..finance.taxonomy import FinancialContext, Journey
+from ..services.claude_client import EFFORT_REPLY, get_llm
 from ..utils.types import Driver, SentimentReading
 
 # --------------------------------------------------------------------------- #
@@ -469,9 +470,25 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
         parts.append("Would that help?")
         return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
 
+    # Account facts are stated before anything else can short-circuit the reply.
+    # They used to sit after the no-recommendation early return, so a plain
+    # "how much do I owe?" — which triggers no vulnerability and retrieves no
+    # policy — fell through to "let me bring up your account" while the figure
+    # sat unused in the state. Answering the question the customer asked is not
+    # contingent on a policy clause being retrieved.
+    facts = ""
+    if account is not None and getattr(account, "decision", "none") in ("disclose", "partial"):
+        if account.facts:
+            facts = _state_facts(account.facts)
+        if getattr(account, "refusal_reason", ""):
+            facts = (facts + " " + account.refusal_reason).strip()
+
     recommendation = decision.recommendation
 
     if recommendation is None or not recommendation.adaptations:
+        if facts:
+            return re.sub(r"\s+", " ",
+                          f"{facts} Is there anything else I can help with?").strip()
         # A distressed customer with no retrieved policy is the one case where
         # saying nothing useful is actively harmful. Answer the person, not the
         # transaction, and hand the turn back rather than moving on.
@@ -482,17 +499,16 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
             return f"{opener} Let me talk you through the support we can offer."
         return "Thanks — I can help with that. Let me bring up your account."
 
-    offers, reassurances = offers_for(decision, retrieved)
+    # A reply carrying figures has already used most of the customer's attention,
+    # so it gets one offer rather than two.
+    offers, reassurances = offers_for(decision, retrieved, limit=1 if facts else 2)
 
     parts = [opener]
 
     # If they asked about their money, answer that first — an offer lands better
     # once the customer knows what it is an offer about.
-    if account is not None and getattr(account, "decision", "none") in ("disclose", "partial"):
-        if account.facts:
-            parts.append(_state_facts(account.facts))
-        if account.refusal_reason:      # the "partial" case: masked, not withheld
-            parts.append(account.refusal_reason)
+    if facts:
+        parts.append(facts)
 
     if reassurances:
         # Only if it adds something. The essentials reassurance and the
@@ -579,3 +595,93 @@ def build_reply_prompt(customer_text: str, decision,
         lines += ["", f"The customer sounds {descriptor}."]
     lines += ["", "Write the handler's reply, speaking directly to the customer:"]
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Lines for the procedural stages of the call
+# --------------------------------------------------------------------------- #
+# Approved wording for each objective, used when no model is configured. These
+# are floors, not scripts: with a model the handler says the same thing in their
+# own words, which is why a caller does not hear the identical sentence twice.
+_STAGE_FALLBACK: dict[str, str] = {
+    "ask who you are speaking to": "Thank you. Can I take your name, please?",
+    "ask for their name again": "Sorry, I didn't catch that — can I take your name?",
+    "proceed without the account": (
+        "I'm not able to bring up an account without those details, but I can "
+        "still help. What's on your mind?"),
+    "respond": "I see. Tell me a little more.",
+    "ask how you can help": "Thank you, that's all confirmed. How can I help you today?",
+    "confirm they are verified and ask how you can help": (
+        "Thank you, that's confirmed. How can I help you today?"),
+    "offer general help without the account": (
+        "I can't go through the account itself, but I can still help. "
+        "What did you need?"),
+    "explain you cannot go through the account, and offer branch or post": (
+        "I'm sorry — I can't confirm those details, so I'm not able to go through "
+        "the account on this call. Any branch can help you with ID, or you can "
+        "write to us."),
+}
+
+
+# Objectives that embed a value, matched on a cue rather than the whole string.
+_OBJECTIVE_TEMPLATES: list[tuple[str, str]] = [
+    ("their date of birth", "Thank you. {name}could you confirm your date of birth?"),
+    ("the postcode", "Thank you. {name}could you confirm the PIN code on the account?"),
+    ("spell it", "Sorry, {name}I can't find that name — could you spell it for me?"),
+    ("a security detail", "Thank you. {name}could you confirm a detail on the account?"),
+    ("did not match", "That doesn't quite match what I have, I'm afraid. "
+                      "Could we try another detail?"),
+]
+
+
+def stage_line(objective: str, *, customer_name: str = "", last_utterance: str = "",
+               disclosure: str = "", history: str = "") -> str:
+    """The handler's line at a procedural stage of the call.
+
+    The *content* is fixed by `objective` — a bank must take a name and confirm
+    identity in a consistent way — but the *wording* is generated, because a
+    handler who says the identical sentence to every caller sounds like an IVR,
+    and because the line has to bend around whatever the customer just said.
+
+    `disclosure` is the important argument. A customer often says the thing that
+    matters while you are still taking their details; when that happens the line
+    must acknowledge it before continuing with the procedure.
+    """
+    llm = get_llm()
+    if llm.available:
+        parts = [f"Stage objective: {objective}."]
+        if customer_name:
+            parts.append(f"The customer's name is {customer_name}.")
+        if history:
+            parts.append(history)
+        if last_utterance:
+            parts.append(f"They have just said: {last_utterance}")
+        if disclosure:
+            parts.append(
+                f"IMPORTANT — they have just disclosed something difficult: "
+                f"{disclosure}. Acknowledge that warmly in your first clause, then "
+                f"do what the objective asks.")
+        parts.append("Write the handler's next line.")
+
+        from .prompts import HANDLER_TURN_SYSTEM
+
+        drafted = llm.text(HANDLER_TURN_SYSTEM, "\n\n".join(parts),
+                           max_tokens=160, effort=EFFORT_REPLY)
+        if drafted and drafted.strip():
+            return drafted.strip().strip('"')
+
+    line = _STAGE_FALLBACK.get(objective)
+    if line:
+        if customer_name and "name, please" not in line:
+            line = line.replace("Thank you,", f"Thank you, {customer_name.split()[0]},", 1)
+        return line
+
+    # Objectives that carry a value in them ("ask for their date of birth") have
+    # no fixed entry, so they are turned into a question here. Falling back to
+    # speaking the objective itself put "Thank them by name and ask for their
+    # date of birth." in the handler's mouth — a stage direction read aloud.
+    first = customer_name.split()[0] if customer_name else ""
+    for cue, template in _OBJECTIVE_TEMPLATES:
+        if cue in objective:
+            return template.format(name=(f"{first}, " if first else "")).strip()
+    return "Sorry — could you bear with me one moment?"

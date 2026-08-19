@@ -106,16 +106,14 @@ def test_ordinary_numbers_in_conversation_survive():
     assert result.total == 0
 
 
-def test_written_uk_identifiers_are_masked():
-    # AB…C is a valid NI prefix/suffix pair; the letters D, F, I, Q, U and V are
-    # never issued, and the pattern excludes them deliberately.
-    text = ("my NI number is AB 12 34 56 C, I live at SW1A 1AA "
+def test_written_indian_identifiers_are_masked():
+    text = ("my PAN is AFZPD1274K, Aadhaar 4321 8765 2109, "
             "and I was born on 12/03/1958")
     result = redact(text)
-    assert "AB 12 34 56 C" not in result.text
-    assert "SW1A 1AA" not in result.text
+    assert "AFZPD1274K" not in result.text
+    assert "4321 8765 2109" not in result.text
     assert "12/03/1958" not in result.text
-    assert {"ni_number", "postcode", "date_of_birth"} <= set(result.redactions)
+    assert {"pan", "aadhaar", "date_of_birth"} <= set(result.redactions)
 
 
 def test_announcement_is_flagged_before_the_value_is_spoken():
@@ -140,9 +138,9 @@ def test_value_split_across_two_fragments_is_still_caught():
 
 def test_redactor_accumulates_totals_across_a_call():
     redactor = LivePIIRedactor()
-    redactor.feed("my email is jane@example.com")
-    redactor.feed("and my postcode is SW1A 1AA")
-    assert set(redactor.total_redactions) == {"email", "postcode"}
+    redactor.feed("my email is meera@example.in")
+    redactor.feed("and my PAN is AFZPD1274K")
+    assert set(redactor.total_redactions) == {"email", "pan"}
 
 
 # --------------------------------------------------------------------------- #

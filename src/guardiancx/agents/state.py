@@ -13,6 +13,21 @@ from ..utils.types import (
 )
 
 
+def recent_history(state: "AgentState", turns: int = 6) -> str:
+    """The last few turns, rendered for a prompt.
+
+    Short on purpose. The whole call is rarely relevant and always expensive;
+    what matters is the immediate thread — the question the customer is
+    answering, and the thing they disclosed two turns ago.
+    """
+    history = state.get("history") or []
+    if not history:
+        return ""
+    lines = [f"{t.get('speaker', '?').title()}: {t.get('text', '')}"
+             for t in history[-turns:]]
+    return "Earlier in this call:\n" + "\n".join(lines)
+
+
 class AgentState(TypedDict, total=False):
     # inputs
     conversation_id: str
@@ -22,6 +37,10 @@ class AgentState(TypedDict, total=False):
     text: str
     channel: str                  # "chat" | "voice"
     voice_signals: dict[str, Any]  # VoiceSignals dump when the turn was spoken
+    # The call so far, oldest first: [{"speaker": ..., "text": ...}]. Without it
+    # every turn is read in isolation, and "Yes." answering "Would that help?"
+    # scores as an unremarkable two-letter utterance.
+    history: list[dict[str, str]]
 
     # produced by agents
     masked_text: str

@@ -30,7 +30,7 @@ from ..services.claude_client import EFFORT_ANALYSIS, get_claude
 from ..utils.types import SentimentReading
 from ..voice.prosody import VoiceSignals
 from .prompts import SENTIMENT_SYSTEM
-from .state import AgentState
+from .state import AgentState, recent_history
 
 _SCHEMA = {
     "type": "object",
@@ -134,7 +134,9 @@ def run(state: AgentState) -> AgentState:
     voice = VoiceSignals(**state["voice_signals"]) if state.get("voice_signals") else VoiceSignals()
 
     llm = get_claude()
-    user = f"Customer utterance: {text}\nVoice signals: {voice.summary()}"
+    history = recent_history(state, turns=4)
+    user = ((history + "\n\n") if history else "") + \
+        f"Customer utterance: {text}\nVoice signals: {voice.summary()}"
     result = llm.structured(SENTIMENT_SYSTEM, user, _SCHEMA,
                             max_tokens=400, effort=EFFORT_ANALYSIS)
     if result:

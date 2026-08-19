@@ -45,6 +45,7 @@ from ..finance.accounts import (
     accounts_for,
     context_summary,
     get_customer,
+    inr,
 )
 from ..services.claude_client import EFFORT_ANALYSIS, get_claude
 from ..utils.logging import get_logger
@@ -120,21 +121,26 @@ _FIELD_CUES: list[tuple[str, re.Pattern]] = [
 
 
 def _facts_for(account: Account, field: str) -> list[str]:
-    """Masked, speakable facts about one account."""
+    """Masked, speakable facts about one account.
+
+    Figures go through `inr`, so a customer hears ₹2,84,000 rather than a
+    Western-grouped number in the wrong currency, and instalments are EMIs.
+    """
     facts = [f"{account.label}, {account.masked_number}"]
     if field in ("balance", "other", "none", "statement"):
         if account.owed:
-            facts.append(f"£{account.owed:,.2f} outstanding")
+            facts.append(f"{inr(account.owed)} outstanding")
         else:
-            facts.append(f"£{account.balance:,.2f} available")
+            facts.append(f"{inr(account.balance)} available")
     if field in ("arrears", "balance", "other") and account.arrears_months:
-        facts.append(f"{account.arrears_months} month(s) behind, "
-                     f"£{account.arrears_amount:,.2f} to bring it up to date")
+        facts.append(f"{account.arrears_months} EMI(s) overdue, "
+                     f"{inr(account.arrears_amount)} to bring it up to date")
     if field in ("payment", "arrears", "other", "none") and account.monthly_payment:
-        facts.append(f"£{account.monthly_payment:,.2f} due on {account.next_payment_date}")
+        facts.append(f"an EMI of {inr(account.monthly_payment)} due on "
+                     f"{account.next_payment_date}")
     if field == "transactions":
         for txn in account.transactions[:3]:
-            facts.append(f"{txn.date}: {txn.description} £{abs(txn.amount):,.2f}")
+            facts.append(f"{txn.date}: {txn.description} {inr(abs(txn.amount))}")
     return facts
 
 
@@ -158,8 +164,13 @@ def _resolve(customer_id: str, text: str, field: str, subject: str,
     # Third-party is decided here, not by the model, and the stricter reading
     # always wins: if either the model or the cue pattern says someone else's
     # data is in play, it is refused.
-    looks_third_party = bool(_THIRD_PARTY_CUES.search(text)) and not _SELF_CUES.search(text)
-    if subject == "third_party" or looks_third_party:
+    # Both signals — the model's reading and the phrase cues — only refuse when a
+    # request is actually being made. "My husband passed away and I've missed two
+    # EMIs" mentions a third party and asks for nothing; refusing it told a widow
+    # she could not discuss her own home loan, which is worse than useless.
+    asking = bool(_REQUEST_SHAPE.search(text) and _DATA_NOUN.search(text))
+    cues = bool(_THIRD_PARTY_CUES.search(text)) and not _SELF_CUES.search(text)
+    if asking and (subject == "third_party" or cues):
         joint = [a for a in own if a.is_joint]
         alternative = (
             f"I can talk about the {joint[0].label.lower()} you hold together"

@@ -1,4 +1,4 @@
-# Northbank — Extended Vulnerable Customer Playbook (Support & Forbearance)
+# Pan Indian Bank — Extended Vulnerable Customer Playbook (Support & Forbearance)
 
 This playbook extends the core vulnerability policy with additional clauses for
 situations handlers encounter in practice. It follows the same four regulatory
@@ -11,22 +11,22 @@ drivers. Detection is advisory; every adaptation offered must be recorded.
 ### VP-H4 — Mental health crisis or distress
 Journeys: general_servicing, arrears_collections, complaint
 Offer: I can stay on the line with you for as long as you need
-Offer: I can give you the number for Samaritans — that's 116 123, free any time
+Offer: I can give you the number for KIRAN, the government mental-health helpline — 1800-599-0019, free, day or night
 Offer: I can pause everything on the account so there's nothing to worry about today
 Where a customer expresses acute distress, hopelessness, or thoughts of self-harm,
 prioritise the person over the transaction. Stop any collections or sales process
 immediately, stay calm and listen, and offer to signpost urgent support (e.g. a
-crisis line or Samaritans on 116 123). Offer to pause account activity and arrange
+crisis line or the KIRAN mental-health helpline on 1800-599-0019). Offer to pause account activity and arrange
 a callback from the specialist support team. Never leave the customer without a
 route to help.
 
 ### VP-H5 — Addiction and gambling-related harm
 Journeys: gambling_harm, product_sale
 Offer: I can put a block on gambling payments on your card today
-Offer: I can give you the number for GamCare — that's 0808 8020 133, free and confidential
+Offer: I can give you the number for the KIRAN helpline — 1800-599-0019, free and confidential
 When a customer indicates gambling harm or another addiction affecting their
 finances, offer practical tools without judgement: a gambling block on the card,
-spending limits, a cooling-off period on credit, and signposting to GamCare
+spending limits, a cooling-off period on credit, and signposting to a counselling helpline
 (0808 8020 133) or equivalent support. Avoid offering additional credit.
 
 ---
@@ -49,9 +49,9 @@ safely.
 Journeys: affordability_shock, forbearance_request
 Offer: I can look at your payments now your income has dropped
 Offer: I can move your payment date to line up with when you're paid
-When a customer is on parental leave or adjusting to a new baby with reduced
+When a customer is on maternity or paternity leave or adjusting to a new baby with reduced
 income, offer a proactive affordability review, flexible payment dates aligned to
-pay, and a temporary reduction or payment holiday where eligible. Avoid
+pay, and a temporary reduction or EMI moratorium where eligible. Avoid
 time-pressured decisions.
 
 ---
@@ -60,13 +60,13 @@ time-pressured decisions.
 
 ### VP-R4 — Priority debts and essential spending
 Journeys: arrears_collections, forbearance_request, affordability_shock
-Offer: Your rent, energy and food come first — we come after that
+Offer: Your rent, electricity and food come first — we come after that
 Offer: I can pause things while you get free, independent debt advice
-When a customer is prioritising between essential bills (rent/mortgage, council
-tax, energy, food) and credit repayments, treat our debt as non-priority relative
-to essentials. Offer breathing space, do not pressure for payment that would risk
+When a customer is prioritising between essential bills (rent/home loan, council
+tax, electricity, food) and credit repayments, treat our debt as non-priority relative
+to essentials. Offer a formal relief period, do not pressure for payment that would risk
 essentials, and provide a simple income-and-expenditure review. Signpost free debt
-advice (StepChange, National Debtline).
+advice (a Financial Literacy Centre).
 
 ### VP-R5 — Income maximisation and benefits
 Journeys: affordability_shock, forbearance_request

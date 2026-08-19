@@ -82,16 +82,37 @@ def _risk_floor(state: AgentState) -> RiskLevel:
 
 
 def _fallback(state: AgentState) -> Recommendation:
+    """Guidance without a model.
+
+    It used to hand the handler the retrieved clauses verbatim — clause title,
+    then the full prose, three times over. That is a filing cabinet, not advice:
+    a handler mid-call cannot read three paragraphs, and the customer-facing
+    reply built on top of it inherited the same wall of text.
+
+    The approved `Offer:` wording on each clause is already the actionable form
+    of that clause, so the fallback assembles those instead and cites where each
+    came from. The full prose stays one click away in the retrieved-policy list.
+    """
     retrieved = state.get("retrieved", [])
-    adaptations = [f"{c.title}: {c.text}" for c in retrieved]
-    citations = [c.policy_reference for c in retrieved]
-    conf = round(min(0.6 + 0.1 * len(retrieved), 0.9), 2) if retrieved else 0.0
+    if not retrieved:
+        return Recommendation(summary="No policy adaptation retrieved.",
+                              risk_level=_risk_floor(state), source="heuristic")
+
+    adaptations: list[str] = []
+    for chunk in retrieved:
+        for offer in (chunk.offers or [])[:2]:
+            if offer not in adaptations:
+                adaptations.append(offer)
+    if not adaptations:
+        # A clause with no approved wording yet: summarise rather than dump.
+        adaptations = [f"{c.title} — see {c.policy_reference}" for c in retrieved]
+
+    top = retrieved[0]
     return Recommendation(
-        summary=("Consider the prescribed adaptation(s) for the detected "
-                 "vulnerability signal." if retrieved else "No policy adaptation retrieved."),
-        adaptations=adaptations,
-        citations=citations,
-        confidence=conf,
+        summary=f"Apply {top.title.lower()} ({top.policy_reference}).",
+        adaptations=adaptations[:4],
+        citations=[c.policy_reference for c in retrieved],
+        confidence=round(min(0.6 + 0.1 * len(retrieved), 0.9), 2),
         risk_level=_risk_floor(state),
         source="heuristic",
     )

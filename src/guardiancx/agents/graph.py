@@ -96,7 +96,8 @@ def get_pipeline() -> Pipeline:
 
 def process_turn(conversation_id: str, customer_id: str, turn_index: int,
                  speaker: str, text: str, channel: str = "chat",
-                 voice_signals: dict | None = None) -> AgentState:
+                 voice_signals: dict | None = None,
+                 history: list[dict] | None = None) -> AgentState:
     """Run one utterance through the graph.
 
     `channel` and `voice_signals` are what let the same pipeline serve a typed
@@ -110,6 +111,7 @@ def process_turn(conversation_id: str, customer_id: str, turn_index: int,
         "speaker": speaker,
         "text": text,
         "channel": channel,
+        "history": list(history or []),
         "trace": [],
     }
     if voice_signals:
@@ -120,6 +122,7 @@ def process_turn(conversation_id: str, customer_id: str, turn_index: int,
 def process_conversation(conversation: dict) -> list[AgentState]:
     """Run every turn of a synthetic conversation through the pipeline."""
     states: list[AgentState] = []
+    history: list[dict] = []
     for i, turn in enumerate(conversation["turns"]):
         states.append(process_turn(
             conversation_id=conversation["conversation_id"],
@@ -129,5 +132,7 @@ def process_conversation(conversation: dict) -> list[AgentState]:
             text=turn["text"],
             channel=turn.get("channel", conversation.get("channel", "chat")),
             voice_signals=turn.get("voice_signals"),
+            history=history,
         ))
+        history.append({"speaker": turn["speaker"], "text": turn["text"]})
     return states

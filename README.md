@@ -1,10 +1,10 @@
 # 🛡️ GuardianCX
 
-**Vulnerable-customer protection for UK retail banking and consumer credit.**
+**Vulnerable-customer protection for Indian retail banking and consumer credit.**
 
 GuardianCX detects and assists **vulnerable customers** *during* the call. A
 nine-agent LangGraph pipeline classifies the banking situation (product, journey,
-financial-stress indicators) and the customer's vulnerability across the four FCA
+financial-stress indicators) and the customer's vulnerability across the four RBI
 drivers, retrieves the firm's prescribed adaptation via journey-aware RAG,
 enforces a seven-guardrail stack, requires human approval for high-risk guidance,
 and writes an **immutable, hash-chained evidence trail** — all surfaced through an
@@ -88,7 +88,7 @@ transcript.
    indicators · arrears; maps the journey to the obligations it engages.
 4. **Sentiment** — fuses what was said with how it was said (prosody) into
    valence, arousal and a calibrated distress score.
-5. **Vulnerability Detection** — structured JSON or heuristic; 4 FCA drivers.
+5. **Vulnerability Detection** — structured JSON or heuristic; 4 RBI drivers.
 6. **Policy Retrieval** — RAG over ChromaDB, filtered by driver and re-ranked by
    journey; a high-harm journey retrieves even when no driver fired.
 7. **Guidance** — drafts an adaptation grounded strictly in retrieved policy,
@@ -119,8 +119,8 @@ approved `Offer:` wording used verbatim; derivation fills the gap for clauses
 without it. Acknowledge, at most two concrete offers, then hand the turn back.
 
 **Finance domain** (`src/guardiancx/finance/`): products, 10 banking journeys, 10
-financial-stress indicators, the journey → regulation map (CONC 7.3, Consumer
-Duty PRIN 2A, Breathing Space, APP-fraud reimbursement, BCOBS, MCOB), and the
+financial-stress indicators, the journey → regulation map (the Fair Practices Code, Consumer
+Duty PRIN 2A, Breathing Space, APP-fraud reimbursement, the Master Circular on Customer Service, the Fair Practices Code), and the
 prohibited actions each journey carries.
 
 **Live call** (`src/guardiancx/voice/`): `endpointing` (semantic EOU),
@@ -216,7 +216,7 @@ Notes for the cloud:
 ## Tests
 
 ```bash
-python -m pytest -q          # 158 tests: guardrails, pipeline, finance, voice, reply, UI
+python -m pytest -q          # 162 tests: guardrails, pipeline, finance, voice, reply, UI
 python scripts/eval_rag.py   # retrieval quality, with and without journey re-ranking
 ```
 

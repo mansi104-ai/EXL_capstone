@@ -23,6 +23,7 @@ before it may be used.
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from typing import Any, Iterator, Optional
@@ -37,13 +38,19 @@ from ..agents.consent import (
     classify as classify_consent,
     response_for as consent_response,
 )
-from ..agents.reply import build_reply_prompt, compose_reply
+from ..agents.call_flow import (
+    CallStage,
+    CallState,
+    advance,
+    opening_objective,
+)
+from ..agents.reply import build_reply_prompt, compose_reply, stage_line
 from ..database.repository import (
     delete_saved_conversation,
     list_saved_conversations,
     save_conversation,
 )
-from ..finance.accounts import context_summary, list_customers
+from ..finance.accounts import BANK_NAME, context_summary, get_customer
 from ..finance.taxonomy import JOURNEY_LABELS, PRODUCT_LABELS, STRESS_LABELS, Journey, Product
 from ..guardrails.manager import get_guardrail_manager
 from ..services.claude_client import EFFORT_REPLY, get_llm
@@ -80,26 +87,32 @@ def _session() -> dict:
     return st.session_state["live"]
 
 
-def _reset_session(customer_id: str = "") -> None:
+def _reset_session(_unused: str = "") -> None:
+    """Start a fresh call.
+
+    No caller is chosen up front. A real inbound call begins with the handler
+    knowing nothing but the ringing phone, and the identification stage is where
+    that changes — pre-selecting the customer skipped the part of the call this
+    system most needs to get right.
+    """
     token = uuid.uuid4().hex[:6].upper()
-    callers = list_customers()
     st.session_state["live"] = {
-        "conv_id": f"LIVE-{token}",
-        "customer_id": customer_id or (callers[0].customer_id if callers else f"CUST-{token}"),
-        "turns": [],          # {speaker, text, channel, voice, eou, redaction}
-        "states": [],         # AgentState per turn
+        "conv_id": f"CALL-{token}",
+        "customer_id": "",           # set by identification
+        "turns": [],                 # {speaker, text, channel, voice, eou, redaction}
+        "states": [],                # AgentState per turn ({} for procedural turns)
         "redactor": LivePIIRedactor(),
-        "last_seq": 0,        # highest voice-console utterance handled
-        "pending": None,      # a customer turn awaiting its streamed reply
+        "last_seq": 0,               # highest voice-console utterance handled
+        "pending": None,             # a customer turn awaiting its streamed reply
         "reply_audio": None,
         "reply_id": "",
         "saved_at": "",
         "last_audio": None,
-        # The call opens by asking to record, and nothing is assessed until the
-        # customer answers. `asked_twice` tracks the one clarification we allow.
         "consent": ConsentState.PENDING,
         "consent_asked_twice": False,
         "consent_rationale": "",
+        "call": CallState(),         # where the call has got to
+        "ended": "",                 # why the call ended, if it has
     }
 
 
@@ -133,18 +146,16 @@ def live_monitor() -> None:
 
     with left:
         _session_header(ss)
-        if ss["consent"] is ConsentState.REFUSED:
-            _refused_notice(ss)
-            return
-        if mode == "Call":
+        if mode == "Call" and not ss["ended"]:
             _call_controls(ss)
         _conversation(ss, mode)
 
     # The chat box is pinned to the window, so it lives outside the columns.
-    if mode == "Chat" and ss["consent"] is not ConsentState.REFUSED:
-        placeholder = ("Answer the recording question…"
-                       if ss["consent"] is not ConsentState.GRANTED
-                       else "Type what the customer says…")
+    if mode == "Chat" and not ss["ended"]:
+        placeholder = {
+            ConsentState.PENDING: "Answer the recording question…",
+            ConsentState.UNCLEAR: "Answer the recording question…",
+        }.get(ss["consent"], _input_placeholder(ss))
         typed = st.chat_input(placeholder)
         if typed and typed.strip():
             _customer_turn(ss, typed.strip(), channel="chat")
@@ -152,33 +163,59 @@ def live_monitor() -> None:
 
 
 def _session_header(ss: dict) -> None:
-    callers = list_customers()
-    labels = {f"{c.name} · {c.customer_id}": c.customer_id for c in callers}
-    current = next((k for k, v in labels.items() if v == ss["customer_id"]), None)
+    call: CallState = ss["call"]
+    customer = get_customer(call.customer_id) if call.customer_id else None
 
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2, c3 = st.columns([2.4, 1, 1])
     with c1:
-        chosen = st.selectbox(
-            "Caller", list(labels),
-            index=list(labels).index(current) if current else 0,
-            help="Who is on the line. Their accounts are what the agents reason about.",
-        )
-        if labels[chosen] != ss["customer_id"] and not ss["turns"]:
-            ss["customer_id"] = labels[chosen]
-    if c2.button("Save to library", width="stretch", disabled=not ss["turns"]):
+        who = customer.name if customer else "caller not yet identified"
+        st.markdown(f"**{BANK_NAME}** · call {ss['conv_id']} · {who}")
+        st.caption(_stage_caption(call, ss))
+    if c2.button("Save & end call", width="stretch", disabled=not ss["turns"]):
         _save(ss)
-    if c3.button("New conversation", width="stretch"):
-        _reset_session(ss["customer_id"])
+        _end_call(ss, "Ended by the handler; conversation saved.")
+        st.rerun()
+    if c3.button("End call", width="stretch", disabled=not ss["turns"]):
+        _end_call(ss, "Ended by the handler.")
         st.rerun()
 
-    st.caption(f"Call reference {ss['conv_id']}")
-    with st.expander("What we hold for this caller"):
-        st.code(context_summary(ss["customer_id"]), language="text")
-        st.caption("Everything here is masked before it reaches the agents, the "
-                   "transcript or the evidence record.")
+    if customer is not None and call.is_verified:
+        with st.expander("Account on file"):
+            st.code(context_summary(call.customer_id), language="text")
+            st.caption("Masked before it reaches the agents, the transcript or the "
+                       "evidence record.")
     if ss["saved_at"]:
-        st.caption(f"Saved to the conversation library at {ss['saved_at']} — "
-                   "it now appears under Library, Customer Timeline and Analytics.")
+        st.caption(f"Saved to the conversation library at {ss['saved_at']}.")
+
+
+def _stage_caption(call: CallState, ss: dict) -> str:
+    """One line telling the handler where the call is, and why."""
+    if ss["ended"]:
+        return f"Call closed — {ss['ended']}"
+    if ss["consent"] is not ConsentState.GRANTED:
+        return "Waiting for consent to record — nothing is being assessed yet."
+    return {
+        CallStage.IDENTIFY: "Taking the caller's name.",
+        CallStage.VERIFY: "Confirming identity — no account details until this passes.",
+        CallStage.SERVING: "Identity confirmed. Account details may be discussed.",
+        CallStage.UNVERIFIED: "Not verified — general help only, no account details.",
+    }.get(call.stage, "")
+
+
+def _end_call(ss: dict, reason: str) -> None:
+    ss["ended"] = reason
+    ss["call"].stage = CallStage.CLOSED
+    ss["pending"] = None
+
+
+def _input_placeholder(ss: dict) -> str:
+    """What the chat box invites, given where the call has got to."""
+    return {
+        CallStage.IDENTIFY: "Give the caller's name…",
+        CallStage.VERIFY: "Answer the security question…",
+        CallStage.SERVING: "Say what the customer says…",
+        CallStage.UNVERIFIED: "Say what the customer says…",
+    }.get(ss["call"].stage, "Say what the customer says…")
 
 
 def _refused_notice(ss: dict) -> None:
@@ -281,32 +318,40 @@ def _push_to_talk(ss: dict, data: bytes) -> None:
 def _customer_turn(ss: dict, raw_text: str, channel: str,
                    voice: Optional[prosody.VoiceSignals] = None,
                    silence_ms: int = 0) -> None:
-    """Take one customer utterance through redaction, endpointing and the graph."""
+    """Take one customer utterance through the call.
+
+    Order matters here. Consent gates everything. After that the pipeline runs on
+    *every* turn, including the procedural ones, because a customer routinely
+    discloses the thing that matters while the handler is still taking their
+    name. Only then does the state machine decide what the handler says next.
+    """
     voice = voice or prosody.empty()
 
-    # Until consent is given, the only thing the customer's words are used for is
-    # deciding whether they consented. Nothing is classified, nothing is scored,
-    # and no evidence record is written — running the pipeline first and asking
-    # afterwards would be the exact thing consent is supposed to prevent.
+    if ss["ended"]:
+        return
+
+    # Nothing is classified, scored or recorded until they agree to be recorded.
     if ss["consent"] is not ConsentState.GRANTED:
         _consent_turn(ss, raw_text, channel)
         return
 
-    # Redaction runs first, on the way in. Everything downstream — the agents, the
-    # evidence record, the screen — sees only the redacted text.
-    redaction = ss["redactor"].feed(raw_text)
+    call: CallState = ss["call"]
 
-    # The authoritative endpointing decision. On a call the browser has already
-    # made a timing call to commit the turn; re-running the model here is what
-    # gets traced and recorded, and it is the only decision on the text channel.
-    eou = endpointing.detect(
-        redaction.text, silence_ms=silence_ms, distress=voice.distress,
-    )
+    # Identity checks read the *raw* utterance, because the redactor is about to
+    # mask exactly the values being checked. Only the verdict survives.
+    outcome = advance(call, raw_text)
+    ss["call"] = outcome.state
+
+    redaction = ss["redactor"].feed(raw_text)
+    eou = endpointing.detect(redaction.text, silence_ms=silence_ms,
+                             distress=voice.distress)
 
     state = process_turn(
-        ss["conv_id"], ss["customer_id"], len(ss["turns"]), "customer", redaction.text,
+        ss["conv_id"], ss["call"].customer_id, len(ss["turns"]), "customer",
+        redaction.text,
         channel=channel,
         voice_signals=voice.model_dump() if voice.available else None,
+        history=_history(ss),
     )
     ss["turns"].append({
         "speaker": "customer",
@@ -315,11 +360,85 @@ def _customer_turn(ss: dict, raw_text: str, channel: str,
         "voice": voice.model_dump() if voice.available else None,
         "eou": eou.model_dump(),
         "redaction": redaction.model_dump(),
+        "stage": ss["call"].stage.value,
+        "flow_note": outcome.note,
     })
     ss["states"].append(state)
-    # The reply is drafted on the next render so it can be streamed into view.
-    ss["pending"] = {"customer_text": redaction.text, "channel": channel}
     ss["saved_at"] = ""
+
+    if ss["call"].stage is CallStage.SERVING and outcome.objective == "respond":
+        # The conversation proper: the reply is drafted from policy, account and
+        # guidance, and streamed on the next render.
+        ss["pending"] = {"customer_text": redaction.text, "channel": channel}
+    else:
+        # A procedural stage. The line is still generated rather than scripted,
+        # and it bends around anything the customer just disclosed.
+        _procedural_reply(ss, outcome.objective, state, channel)
+
+
+def _history(ss: dict) -> list[dict]:
+    """The call so far, for the agents that need the thread."""
+    return [{"speaker": t["speaker"], "text": t["text"]} for t in ss["turns"]]
+
+
+def _disclosure_summary(state: dict) -> str:
+    """What the customer just disclosed that a handler must acknowledge."""
+    assessment = state.get("assessment")
+    sentiment = state.get("sentiment")
+    if assessment is None or not assessment.triggered:
+        if sentiment is not None and sentiment.distress >= 0.6:
+            return f"they sound {sentiment.label.lower()}"
+        return ""
+    evidence = [s.evidence for s in assessment.signals
+                if s.driver in assessment.triggered and s.evidence]
+    drivers = ", ".join(d.value.replace("_", " ") for d in assessment.triggered)
+    return f"{drivers} — {evidence[0]}" if evidence else drivers
+
+
+def _procedural_reply(ss: dict, objective: str, state: dict, channel: str) -> None:
+    """Generate and record the handler's line at a non-serving stage."""
+    call: CallState = ss["call"]
+    customer = get_customer(call.customer_id) if call.customer_id else None
+    line = stage_line(
+        objective,
+        customer_name=customer.name if customer else call.claimed_name,
+        last_utterance=ss["turns"][-1]["text"] if ss["turns"] else "",
+        disclosure=_disclosure_summary(state),
+        history=_history_text(ss),
+    )
+    _record_handler_turn(ss, line, channel)
+
+
+def _history_text(ss: dict, turns: int = 4) -> str:
+    recent = ss["turns"][-turns:]
+    if not recent:
+        return ""
+    lines = [f"{t['speaker'].title()}: {t['text']}" for t in recent]
+    return "Earlier in this call:\n" + "\n".join(lines)
+
+
+def _record_handler_turn(ss: dict, line: str, channel: str) -> None:
+    """Append a handler line, check it, and speak it on the call channel."""
+    if not line or not line.strip():
+        return
+    call: CallState = ss["call"]
+    previous = ss["states"][-1] if ss["states"] else {}
+    context = previous.get("financial_context") if previous else None
+    account = previous.get("account_request") if previous else None
+    report = get_guardrail_manager().run_reply(
+        line,
+        journey=context.journey if context else None,
+        account_refused=bool(account is not None and getattr(account, "refused", False)),
+    )
+    ss["turns"].append({
+        "speaker": "agent", "text": line.strip(), "channel": channel,
+        "voice": None, "eou": None, "redaction": None,
+        "clarity": [r.model_dump() for r in report.results],
+        "stage": call.stage.value,
+    })
+    ss["states"].append({})
+    if channel == "voice":
+        _speak(ss, line)
 
 
 def _consent_turn(ss: dict, raw_text: str, channel: str) -> None:
@@ -336,6 +455,23 @@ def _consent_turn(ss: dict, raw_text: str, channel: str) -> None:
     ss["states"].append({})
 
     reply = consent_response(decision, ss["consent_asked_twice"])
+
+    if decision.state is ConsentState.GRANTED:
+        # Consent given: the call moves on to finding out who is calling, and
+        # the handler's next line is that question rather than a confirmation
+        # nobody needs to hear.
+        ss["call"].stage = CallStage.IDENTIFY
+        _record_handler_turn(ss, stage_line(
+            opening_objective(ss["call"]),
+            last_utterance=raw_text,
+            history=_history_text(ss),
+        ), channel)
+        return
+
+    if decision.state is ConsentState.REFUSED:
+        ss["ended"] = "The customer did not consent to being recorded."
+        ss["call"].stage = CallStage.CLOSED
+
     if decision.state is ConsentState.UNCLEAR:
         # A second unclear answer is treated as a refusal by `response_for`;
         # reflect that here so the call actually ends.
@@ -399,59 +535,28 @@ def _reply_stream(ss: dict) -> Iterator[str]:
     composed = compose_reply(decision, state.get("financial_context"),
                              state.get("sentiment"), retrieved=state.get("retrieved"),
                              account=state.get("account_request"))
-    for sentence in composed.split(". "):
-        if sentence:
-            yield sentence.rstrip(".") + ". "
+    yield from _stream_sentences(composed)
+
+
+def _stream_sentences(text: str) -> Iterator[str]:
+    """Release a composed reply a sentence at a time.
+
+    Splitting on ". " and re-appending it turned "Would that help?" into
+    "Would that help?." — the terminator has to be kept, not assumed.
+    """
+    for sentence in re.findall(r"[^.!?]+[.!?]*\s*", text):
+        if sentence.strip():
+            yield sentence
             time.sleep(0.12)
 
 
 def _finalise_reply(ss: dict, reply: str) -> None:
-    """Record the handler's turn and, on a call, synthesise it for playback."""
+    """Record the streamed handler reply, and speak it on the call channel."""
     pending = ss["pending"]
     ss["pending"] = None
     reply = (reply or "").strip()
-    if not reply:
-        return
-
-    state = process_turn(
-        ss["conv_id"], ss["customer_id"], len(ss["turns"]), "agent", reply,
-        channel=pending["channel"],
-    )
-
-    # Check the draft the customer would actually hear. Correct advice phrased in
-    # policy language is still advice they cannot act on, so this runs on every
-    # reply whether it came from the model or the composer.
-    previous = ss["states"][-2] if len(ss["states"]) >= 2 else {}
-    context = previous.get("financial_context")
-    account = previous.get("account_request")
-    clarity = get_guardrail_manager().run_reply(
-        reply,
-        journey=context.journey if context else None,
-        account_refused=bool(account is not None and getattr(account, "refused", False)),
-    )
-
-    ss["turns"].append({"speaker": "agent", "text": reply, "channel": pending["channel"],
-                        "voice": None, "eou": None, "redaction": None,
-                        "clarity": [r.model_dump() for r in clarity.results]})
-    ss["states"].append(state)
-
-    if pending["channel"] != "voice":
-        return
-
-    speech = get_speech()
-    if not speech.available:
-        return
-    try:
-        # The customer's emotional state selects the speaking style — a distressed
-        # caller hears an empathetic delivery, an angry one a deliberately calm one.
-        emotion = _current_emotion(ss)
-        audio = speech.synthesize(reply, emotion=emotion)
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"The reply could not be synthesised: {exc}")
-        return
-    if audio:
-        ss["reply_audio"] = audio
-        ss["reply_id"] = uuid.uuid4().hex[:12]
+    if reply:
+        _record_handler_turn(ss, reply, pending["channel"])
 
 
 # --------------------------------------------------------------------------- #
@@ -459,27 +564,36 @@ def _finalise_reply(ss: dict, reply: str) -> None:
 # --------------------------------------------------------------------------- #
 def _conversation(ss: dict, mode: str) -> None:
     # The call always opens the same way: the handler asks to record, and waits.
-    if ss["consent"] is not ConsentState.GRANTED:
+    if ss["consent"] is ConsentState.PENDING and not ss["turns"]:
         with st.chat_message("assistant"):
             st.markdown(f"**Handler:** {CONSENT_REQUEST}")
-        for turn, state in zip(ss["turns"], ss["states"]):
-            _render_turn(turn, state)
-        if ss["consent"] is ConsentState.UNCLEAR:
-            st.info("The customer has not answered yes or no yet — the handler asks "
-                    "once more, plainly. A question is not consent.")
-        else:
-            st.caption("Nothing is assessed until the customer answers. Try “yes, "
-                       "that's fine”, “I'd rather you didn't”, or “what for?”.")
-        return
-
-    if not ss["turns"] and not ss["pending"]:
-        st.info("Consent given — the conversation can begin. Try one of these:")
-        for example in _EXAMPLES[:3]:
-            st.markdown(f"- *“{example}”*")
+        st.caption("Nothing is assessed until the customer answers. Try “yes, "
+                   "that's fine”, “I'd rather you didn't”, or “what for?”.")
         return
 
     for turn, state in zip(ss["turns"], ss["states"]):
         _render_turn(turn, state)
+
+    if ss["ended"]:
+        # A refusal is a correct outcome, not a failure — but it must not be
+        # missed, so it is styled louder than a handler simply hanging up.
+        if ss["consent"] is ConsentState.REFUSED:
+            st.error(
+                f"**Call ended — the customer did not consent to being recorded.** "
+                f"Nothing was assessed and no evidence record was written. This "
+                f"system analyses what is said, so without consent there is "
+                f"nothing lawful for it to do.")
+        else:
+            st.info(f"**Call ended.** {ss['ended']}")
+        if st.button("Start a new call", type="primary", key="new_after_end"):
+            _reset_session()
+            st.rerun()
+        return
+
+    if ss["consent"] is ConsentState.UNCLEAR:
+        st.caption("The customer has not answered yes or no — the handler asks once "
+                   "more, plainly. A question is not consent.")
+        return
 
     if ss["pending"]:
         with st.chat_message("assistant"):
@@ -488,13 +602,20 @@ def _conversation(ss: dict, mode: str) -> None:
         _finalise_reply(ss, reply if isinstance(reply, str) else "".join(reply))
         st.rerun()
 
+    if ss["call"].stage is CallStage.SERVING and len(ss["turns"]) <= 6:
+        st.caption("Identity confirmed. Try: “I've missed two EMIs on the home loan”, "
+                   "“my husband passed away last month”, or “someone took ₹40,000 "
+                   "from my account”.")
+
 
 def _render_turn(turn: dict, state: dict) -> None:
     role = "user" if turn["speaker"] == "customer" else "assistant"
     with st.chat_message(role):
-        label = "Customer" if turn["speaker"] == "customer" else "Handler (draft)"
+        label = "Customer" if turn["speaker"] == "customer" else "Handler"
         icon = " 🎙️" if turn.get("channel") == "voice" else ""
         st.markdown(f"**{label}{icon}:** {turn['text']}")
+        if turn.get("flow_note"):
+            st.caption(turn["flow_note"])
 
         if turn["speaker"] == "customer":
             _consent_signal(turn)
@@ -724,13 +845,15 @@ def _save(ss: dict) -> None:
         if decision and order[decision.risk_level] > order[max_risk]:
             max_risk = decision.risk_level
 
+    call: CallState = ss["call"]
+    customer = get_customer(call.customer_id) if call.customer_id else None
     channel = "voice" if any(t.get("channel") == "voice" for t in ss["turns"]) else "chat"
     save_conversation(
         conversation_id=ss["conv_id"],
         turns=[{"speaker": t["speaker"], "text": t["text"], "channel": t.get("channel", "chat")}
                for t in ss["turns"]],
-        customer_id=ss["customer_id"],
-        customer_name="Live session",
+        customer_id=call.customer_id,
+        customer_name=customer.name if customer else "Unidentified caller",
         product=PRODUCT_LABELS.get(product, ""),
         channel=channel,
         origin="live",
@@ -738,7 +861,8 @@ def _save(ss: dict) -> None:
         drivers=sorted(drivers),
         journeys=sorted(journeys),
         peak_distress=peak_distress,
-        note=f"Captured live on the {channel} channel.",
+        note=(f"Captured live on the {channel} channel. "
+              + ("Caller verified." if call.is_verified else "Caller not verified.")),
     )
     ss["saved_at"] = time.strftime("%H:%M:%S")
 

@@ -39,6 +39,9 @@ MAX_CLAUSES = 4
 # Distress at or above this retrieves support policy regardless of drivers.
 DISTRESS_RETRIEVAL_THRESHOLD = 0.5
 
+# A clause scoring below this fraction of the best match is dropped as noise.
+RELEVANCE_FLOOR = 0.75
+
 
 def run(state: AgentState) -> AgentState:
     trace = state.setdefault("trace", [])
@@ -83,6 +86,16 @@ def run(state: AgentState) -> AgentState:
                 candidates.append(chunk)
 
     candidates.sort(key=lambda c: c.score, reverse=True)
+
+    # Drop anything far weaker than the best match. Without this, a bereavement
+    # call retrieves the priority-debts clause on a thin similarity score, the
+    # guidance quotes it, and a widow who mentioned no money trouble is told her
+    # rent comes before paying us. A clause that only just cleared the search is
+    # noise, and noise reaches the customer.
+    if candidates:
+        floor = candidates[0].score * RELEVANCE_FLOOR
+        candidates = [c for c in candidates if c.score >= floor]
+
     retrieved = candidates[:MAX_CLAUSES]
     state["retrieved"] = retrieved
 

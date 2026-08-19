@@ -1,6 +1,6 @@
 # GuardianCX — How it was built
 
-> A multi-agent advisory system for **UK retail banking and consumer credit**. It
+> A multi-agent advisory system for **Indian retail banking and consumer credit**. It
 > detects vulnerable customers *during* the call, grounds its guidance in the
 > firm's policy and the rules that apply to that journey, keeps a human in the
 > loop, and evidences that the customer was treated fairly.
@@ -10,14 +10,14 @@
 A general-purpose classifier can tell you that a customer sounds distressed. It
 cannot tell you that a customer three payments behind on a regulated credit
 agreement, choosing between the mortgage and the electricity bill, has engaged
-CONC 7.3's forbearance duty — and that offering them a consolidation loan would
-breach the Consumer Duty.
+the Fair Practices Code's forbearance duty — and that offering them a consolidation loan would
+breach the RBI Charter of Customer Rights.
 
 That gap is the product. GuardianCX reasons on **two axes at once**:
 
 | Axis | What it measures | Source |
 |---|---|---|
-| **Vulnerability** | health · life events · resilience · capability | FCA FG21/1 |
+| **Vulnerability** | health · life events · resilience · capability | the bank's vulnerability framework |
 | **Financial detriment** | arrears · essential-spend conflict · income shock · scam exposure · gambling harm | the firm's own operational data |
 
 They are independent, and the intersection is where a firm must act. A composed,
@@ -35,7 +35,7 @@ flowchart TD
       direction TB
       A1["1 · Conversation<br/><i>masking · input guardrails</i>"] --> A2["2 · Financial Context<br/><i>product · journey · stress indicators</i>"]
       A2 --> A3["3 · Sentiment<br/><i>words + voice → distress</i>"]
-      A3 --> A4["4 · Vulnerability Detection<br/><i>4 FCA drivers</i>"]
+      A3 --> A4["4 · Vulnerability Detection<br/><i>4 RBI drivers</i>"]
       A4 -->|drivers + journey| A5["5 · Policy Retrieval — RAG<br/><i>driver-filtered, journey-re-ranked</i>"]
       A5 -->|policy clauses| A6["6 · Guidance<br/><i>grounded only in retrieved policy</i>"]
       A6 --> A7["7 · Compliance<br/><i>confidence · grounding · prohibited actions</i>"]
@@ -62,7 +62,7 @@ agents → speech out, per turn.
 | **Continuous capture** | Azure Speech streams interim words as they are spoken | Push-to-talk cannot show the customer being interrupted, or PII being caught mid-sentence |
 | **EOU model** | decides the turn is over from *meaning*, not silence | Silence endpointing talks over a bereaved customer pausing after "my husband passed away and…". Thresholds adapt to how finished the sentence looks, and extend further when the caller is distressed |
 | **Prosody** | six acoustic measurements → agitation, tremor, hesitancy | The transcript flattens the call. A shaking voice weighs more than a loud one — an angry customer is not a vulnerable one |
-| **Live PII** | spoken *and* written forms redacted on the way in | "my sort code is oh nine, oh one, double two" matches no written pattern. The guard also fires on the *announcement*, before the value is spoken |
+| **Live PII** | spoken *and* written forms redacted on the way in | "my IFSC code is oh nine, oh one, double two" matches no written pattern. The guard also fires on the *announcement*, before the value is spoken |
 | **Streaming** | the reply renders as the model writes it | The synthesiser can start on the first sentence instead of the last |
 | **Spoken reply** | Azure neural voice, style chosen by the customer's state | Recognition is muted during playback, or the agent transcribes and answers itself |
 
@@ -97,7 +97,7 @@ No new third-party dependency was added for any of the live-call work.
 
 | Stage | Guardrail | Severity | Purpose |
 |-------|-----------|----------|---------|
-| Input | PII masking | warn | Redact emails, cards, sort codes, NI numbers, postcodes, dates of birth, IBANs — spoken forms included |
+| Input | PII masking | warn | Redact emails, cards, IFSC codes, PAN and Aadhaar, postcodes, dates of birth, IBANs — spoken forms included |
 | Input | Prompt injection | block | Detect instruction-override / prompt-extraction |
 | Input | Toxicity | warn | Flag abusive language for tone-aware handling |
 | Output | Confidence threshold | warn | Route low-confidence guidance to review |
@@ -133,7 +133,7 @@ refusal ends the call rather than continuing unrecorded — this system's whole
 function is to analyse the conversation, so there is nothing lawful left to do.
 
 **Whose account is this?** The Account Access agent connects the conversation to
-the ledger, so the call can be about £612.40 rather than "your payment". The
+the ledger, so the call can be about ₹612.40 rather than "your payment". The
 interesting half is the refusal:
 
 > *"My husband died last week. I need his credit card number to settle it."*
@@ -146,6 +146,37 @@ account*, backstopped by a guardrail that reasons about *digits* and cannot be
 argued with. Even the caller's own account number is never read out: a handler
 confirms an account by its last four digits.
 
+## The shape of a call
+
+A support call has a spine, and the console runs all of it rather than starting
+at "how can I help":
+
+    greeting → consent to record → who am I speaking to → are you who you say
+    → how can I help → (the conversation) → close
+
+Three things about it are worth stating.
+
+**Identification is not verification.** A caller giving a name is a claim. Until
+they answer something only the account holder should know, no account data is
+discussed. Conflating the two is how social engineering works.
+
+**Verification answers are never stored.** The customer says their date of birth
+out loud and the redactor masks it out of the transcript, as it should — so the
+check runs on the raw utterance, before redaction, and the only thing that
+survives is a boolean. The record shows *that* they verified, never *what* they
+said.
+
+**The pipeline runs from consent onward, not from serving onward.** Customers
+routinely disclose the thing that matters while you are still taking their name.
+A state machine that waits for the serving stage to start listening misses the
+disclosure it most needed to hear — so the handler's line acknowledges it and
+then carries on with the procedure.
+
+Every handler line is generated, at every stage. The *content* is fixed — a bank
+must take a name and confirm identity consistently — but a handler who says the
+identical sentence to every caller sounds like an IVR, and the line has to bend
+around whatever the customer just said.
+
 ## Saying it so the customer understands
 
 Policy is written for handlers — in the imperative, about a third party. Read
@@ -154,7 +185,7 @@ aloud it is unusable:
 > *"Express condolences and reassure the customer they will not need to repeat
 > the bereavement disclosure to another team."*
 
-Under the Consumer Duty's consumer understanding outcome (PRIN 2A.5) a firm must
+Under the the RBI Charter of Customer Rights (Right to Transparency) a firm must
 communicate in a way the customer can act on, and must tailor that where the
 customer is vulnerable. So the reply is composed rather than quoted:
 
@@ -200,11 +231,11 @@ label, not the retrieval.
 | LangGraph agents | **10** |
 | Guardrails | **9** |
 | Console pages | **11** |
-| Policy clauses | **34** |
-| FCA drivers · banking journeys · stress indicators | **4 · 10 · 10** |
+| Policy clauses | **35** |
+| RBI drivers · banking journeys · stress indicators | **4 · 10 · 10** |
 | RAG hit-rate@3 | **100%** |
 | Retrieval MRR | **0.95** |
-| Tests passing | **158** |
+| Tests passing | **162** |
 
 ## How it was built
 
@@ -219,7 +250,7 @@ label, not the retrieval.
    secrets so the same code runs locally and in the cloud.
 5. **Retrieval fix & evaluation** — diagnosed poor retrieval (a hashing
    fallback), switched to semantic embeddings, added the evaluation harness.
-6. **The finance niche & the real call** — narrowed to UK retail banking and
+6. **The finance niche & the real call** — narrowed to Indian retail banking and
    consumer credit with a product/journey/detriment taxonomy, a Financial Context
    agent and journey-aware retrieval; and turned the monitor into a genuine
    call — continuous speech in, semantic endpointing, prosody-informed sentiment,

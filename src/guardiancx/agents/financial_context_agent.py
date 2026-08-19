@@ -29,7 +29,7 @@ from ..finance.taxonomy import (
 )
 from ..services.claude_client import EFFORT_ANALYSIS, get_claude
 from .prompts import FINANCIAL_CONTEXT_SYSTEM
-from .state import AgentState
+from .state import AgentState, recent_history
 
 _SCHEMA = {
     "type": "object",
@@ -85,8 +85,13 @@ def run(state: AgentState) -> AgentState:
         return state
 
     text = state.get("masked_text") or state.get("text", "")
+    # A short reply only means something against what came before it: "yes" is a
+    # journey classification only once you know what was asked.
+    history = recent_history(state)
+    user = f"{history}\n\nThe customer has just said: {text}" if history else text
+
     llm = get_claude()
-    result = llm.structured(FINANCIAL_CONTEXT_SYSTEM, text, _SCHEMA,
+    result = llm.structured(FINANCIAL_CONTEXT_SYSTEM, user, _SCHEMA,
                             max_tokens=600, effort=EFFORT_ANALYSIS)
     context = _coerce(result, llm.provider) if result else classify_heuristic(text)
 
