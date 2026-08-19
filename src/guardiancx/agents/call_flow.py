@@ -409,3 +409,35 @@ def opening_objective(state: CallState) -> str:
         CallStage.SERVING: "ask how you can help",
         CallStage.UNVERIFIED: "offer general help without the account",
     }.get(state.stage, "respond")
+
+
+# --------------------------------------------------------------------------- #
+# The customer ending the call
+# --------------------------------------------------------------------------- #
+# A customer can hang up at any point, and they say so in ordinary words. Without
+# this the console kept answering "let me bring up your account" to someone who
+# had already said goodbye — the most obviously broken thing a phone system can
+# do.
+_GOODBYE = re.compile(
+    r"^\W*(?:end\s+(?:the\s+)?call|hang\s+up|goodbye|good\s?bye|bye(?:\s+bye)?|"
+    r"that'?s\s+(?:all|it|everything)|nothing\s+else|i'?m\s+done|"
+    r"thanks?(?:\s+you)?[,.!\s]*(?:bye|goodbye|that'?s\s+all)|"
+    r"no\s+thanks?,?\s*(?:that'?s\s+all|bye)?)\W*$",
+    re.IGNORECASE,
+)
+
+# The handler's closing line, when the customer has ended it.
+CALL_CLOSED = (
+    "Of course. Thank you for calling, and please do ring back any time — "
+    "everything we've discussed is on your account. Take care."
+)
+
+
+def wants_to_end(text: str) -> bool:
+    """Has the customer just ended the call?
+
+    Anchored to the whole utterance on purpose. "That's all I can afford" and
+    "I'm done with this bank" both contain a closing phrase and neither is a
+    goodbye, so a substring match would hang up on a customer mid-complaint.
+    """
+    return bool(_GOODBYE.match((text or "").strip()))

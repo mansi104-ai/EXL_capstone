@@ -37,7 +37,7 @@ from .prompts import CONSENT_SYSTEM
 # The opening line. Short, specific about what is recorded and why, and it asks a
 # real question rather than announcing a decision already taken.
 CONSENT_REQUEST = (
-    "Hello, you're through to Northbank. Before we start — I record and make notes "
+    "Hello, you're through to Pan Indian Bank. Before we start — I record and make notes "
     "on our calls so I can get you the right support and you don't have to repeat "
     "yourself later. Is that alright with you?"
 )
@@ -53,6 +53,14 @@ CONSENT_DECLINED = (
 CONSENT_CLARIFY = (
     "Of course — the notes stay on your account and are only seen by the team "
     "helping you. Would you like me to go ahead?"
+)
+
+# After several asks with no answer either way. Not a refusal, and worded so it
+# does not read as one — the customer gets the routes that do not need consent.
+CONSENT_EXHAUSTED = (
+    "I don't want to keep asking. I can't take you through the account without "
+    "recording the call, but you can visit any branch or write to us and we'll "
+    "help you there. Is there anything else I can do right now?"
 )
 
 
@@ -92,14 +100,22 @@ _SCHEMA = {
 # refusal as consent records someone against their wishes, while treating
 # consent as unclear merely asks again.
 _REFUSAL = re.compile(
-    # "no" carries a lookahead because the most common way to *agree* in English
-    # contains it: "sure, no problem", "no worries", "no bother". Without this
-    # the system hangs up on a customer who just said yes — and a false refusal
-    # ends the call, so it is the expensive direction to be wrong in.
-    r"\b(?:no(?!\s+(?:problem|worries|bother|trouble|issue|objection))|nope|nah|"
-    r"don'?t|do not|rather (?:you )?(?:didn'?t|not)|"
-    r"i'?d rather not|not happy|not comfortable|refuse|object|"
-    r"without (?:the )?record|please don'?t|stop recording|turn (?:it|that) off)\b",
+    # Every alternative here has to be *about the recording*. A bare "don't" was
+    # in this pattern once, and it read "I don't have the money to repay" as a
+    # refusal — so a customer explaining she could not pay her home loan was told
+    # the call was being ended. Generic negation is not a refusal; the sentence
+    # has to decline the thing that was asked.
+    #
+    # "no" keeps its lookahead because the commonest ways to *agree* in English
+    # contain it: "sure, no problem", "no worries", "no bother".
+    r"\b(?:no(?!\s+(?:problem|worries|bother|trouble|issue|objection))|nope|nah)\b"
+    r"|(?:please\s+)?don'?t\s+(?:record|tape|do\s+that|make\s+notes)"
+    r"|rather\s+(?:you\s+)?(?:didn'?t|not\b)"
+    r"|i'?d\s+rather\s+not"
+    r"|not\s+(?:happy|comfortable|okay|ok)\s+(?:with|about)"
+    r"|\brefuse\b|\bi\s+object\b"
+    r"|without\s+(?:the\s+)?record"
+    r"|stop\s+recording|turn\s+(?:it|that)\s+off",
     re.IGNORECASE,
 )
 _AGREEMENT = re.compile(
@@ -155,12 +171,25 @@ def classify(text: str) -> ConsentDecision:
     return decision
 
 
-def response_for(decision: ConsentDecision, asked_before: bool) -> Optional[str]:
-    """What the handler says next, given the answer."""
+# How many times the question may be re-asked before the call is closed. Only
+# an explicit refusal ends it sooner.
+MAX_CONSENT_ASKS = 3
+
+
+def response_for(decision: ConsentDecision, asks_so_far: int = 0) -> Optional[str]:
+    """What the handler says next, given the answer.
+
+    A customer who ignores the question and starts talking about their problem
+    has **not** refused. Treating a second non-answer as a refusal hung up on a
+    woman explaining she could not repay her home loan — she was engaging with
+    the call, just not with the procedural question in front of it. Only an
+    explicit "no" ends the call early; everything else gets asked again, and the
+    asking acknowledges whatever she actually said.
+    """
     if decision.state is ConsentState.REFUSED:
         return CONSENT_DECLINED
     if decision.state is ConsentState.GRANTED:
         return None      # the conversation proper begins
-    # Unclear: clarify once, then treat a second unclear answer as a refusal —
-    # consent that has to be extracted is not consent.
-    return CONSENT_CLARIFY if not asked_before else CONSENT_DECLINED
+    if asks_so_far + 1 >= MAX_CONSENT_ASKS:
+        return CONSENT_EXHAUSTED
+    return CONSENT_CLARIFY

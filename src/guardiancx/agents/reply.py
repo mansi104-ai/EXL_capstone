@@ -497,7 +497,10 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
                     "and tell me what would help most right now.")
         if decision.assessment.triggered:
             return f"{opener} Let me talk you through the support we can offer."
-        return "Thanks — I can help with that. Let me bring up your account."
+        # Nothing triggered, no policy, no account question. Rather than assert
+        # that an account is being brought up — which is what this used to say to
+        # anyone asking the time — invite the customer to say what they need.
+        return "Of course. What can I help you with today?"
 
     # A reply carrying figures has already used most of the customer's attention,
     # so it gets one offer rather than two.
@@ -518,8 +521,13 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
         if not _overlaps(reassurance, offers):
             parts.append(reassurance.capitalize().rstrip(".") + ".")
     if offers:
-        parts.append(_join_offers(offers))
-        parts.append("Would that help?")
+        joined = _join_offers(offers)
+        parts.append(joined)
+        # Approved wording sometimes ends in a question of its own ("...is that
+        # alright?"). Appending a second one produced "is that alright? Would
+        # that help?" — two questions, so the customer answers neither.
+        if not joined.rstrip().endswith("?"):
+            parts.append("Would that help?")
     else:
         parts.append("Let me talk you through the support we can offer.")
 
@@ -533,7 +541,7 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
 def build_reply_prompt(customer_text: str, decision,
                        context: Optional[FinancialContext] = None,
                        sentiment: Optional[SentimentReading] = None,
-                       retrieved=None, account=None) -> str:
+                       retrieved=None, account=None, history: str = "") -> str:
     """Assemble the user message for the handler-reply model call.
 
     The policy is passed through the same plain-English pass the template path
@@ -549,9 +557,17 @@ def build_reply_prompt(customer_text: str, decision,
     else:
         guidance, available, promises = "(no specific policy retrieved)", "- (nothing specific)", ""
 
-    lines = [
-        f"The customer said: {customer_text}",
-    ]
+    lines = []
+    if history:
+        # Without the thread, "Yes, it would help." is an unremarkable four-word
+        # utterance that retrieves nothing — and the handler answers it by asking
+        # what they need, having just offered them something.
+        lines += [history, ""]
+    lines.append(f"The customer has just said: {customer_text}")
+    if history:
+        lines.append(
+            "If they are agreeing to something you just offered, confirm you are "
+            "doing it and say what happens next. Do not ask again what they need.")
 
     # Account material comes first in the prompt as well as in the reply: it is
     # the thing most likely to be dropped if it arrives last.
@@ -685,3 +701,64 @@ def stage_line(objective: str, *, customer_name: str = "", last_utterance: str =
         if cue in objective:
             return template.format(name=(f"{first}, " if first else "")).strip()
     return "Sorry — could you bear with me one moment?"
+
+
+# --------------------------------------------------------------------------- #
+# Following the thread without a model
+# --------------------------------------------------------------------------- #
+# Word sets rather than one big alternation: this has to be obviously correct at
+# a glance, and a regex that silently stops matching "yes" is worse than useless.
+_AFFIRMATIVE_OPENERS = {
+    "yes", "yeah", "yep", "yup", "sure", "okay", "ok", "please", "definitely",
+    "absolutely", "certainly", "alright", "right", "good", "great", "fine",
+}
+_AFFIRMATIVE_PHRASES = (
+    "go ahead", "please do", "that would help", "it would help", "that helps",
+    "sounds good", "that's fine", "thats fine", "yes please", "i would",
+)
+# A "yes" carrying one of these is not a plain agreement — "yes, but I still
+# can't pay" has a second half that matters far more than the first.
+_CONTRADICTIONS = {"but", "however", "although", "still", "not", "cant",
+                   "cannot", "wont", "except"}
+
+# "I can arrange a moratorium" -> "arrange a moratorium"
+_OFFER_IN_LINE = re.compile(r"I (?:can|could|will|'ll) ([^.?!]{4,90})", re.IGNORECASE)
+
+
+def is_affirmation(text: str) -> bool:
+    """Is this the customer saying yes to what was just offered?
+
+    Deliberately narrow. It only fires on a short utterance that opens with an
+    agreement and carries no contradiction, because the cost of being wrong is
+    confirming an action the customer did not actually accept.
+    """
+    stripped = (text or "").strip().lower()
+    if not stripped:
+        return False
+    words = re.findall(r"[a-z']+", stripped)
+    if not words or len(words) > 8:
+        return False
+    if _CONTRADICTIONS & set(words):
+        return False
+    if words[0] in _AFFIRMATIVE_OPENERS:
+        return True
+    return any(phrase in stripped for phrase in _AFFIRMATIVE_PHRASES)
+
+
+def confirm_offer(previous_handler_line: str) -> str:
+    """Confirm the thing the handler last offered.
+
+    Without this, a bare "yes" retrieves no policy, triggers no driver and
+    carries no account question — so the composer fell through to asking the
+    customer what they needed, one turn after offering it to them. Which is the
+    most obviously broken thing a support call can do.
+    """
+    offers = _OFFER_IN_LINE.findall(previous_handler_line or "")
+    if not offers:
+        return ("Of course — I'll get that started and confirm it in writing. "
+                "Is there anything else I can help with?")
+    # Take the offer up to its first comma: the tail is usually a second clause
+    # ("…, and confirm that in writing") that this sentence is about to add back.
+    action = offers[0].split(",")[0].strip().rstrip(".")
+    return (f"Right — I'll {action}, and confirm it in writing. "
+            "Is there anything else I can help with?")

@@ -34,17 +34,26 @@ from ..agents.graph import process_conversation, process_turn
 from ..agents.prompts import HANDLER_REPLY_SYSTEM
 from ..agents.consent import (
     CONSENT_REQUEST,
+    MAX_CONSENT_ASKS,
     ConsentState,
     classify as classify_consent,
     response_for as consent_response,
 )
 from ..agents.call_flow import (
+    CALL_CLOSED,
     CallStage,
     CallState,
     advance,
     opening_objective,
+    wants_to_end,
 )
-from ..agents.reply import build_reply_prompt, compose_reply, stage_line
+from ..agents.reply import (
+    build_reply_prompt,
+    compose_reply,
+    confirm_offer,
+    is_affirmation,
+    stage_line,
+)
 from ..database.repository import (
     delete_saved_conversation,
     list_saved_conversations,
@@ -109,7 +118,7 @@ def _reset_session(_unused: str = "") -> None:
         "saved_at": "",
         "last_audio": None,
         "consent": ConsentState.PENDING,
-        "consent_asked_twice": False,
+        "consent_asks": 0,
         "consent_rationale": "",
         "call": CallState(),         # where the call has got to
         "ended": "",                 # why the call ended, if it has
@@ -330,6 +339,21 @@ def _customer_turn(ss: dict, raw_text: str, channel: str,
     if ss["ended"]:
         return
 
+    # The customer can hang up at any point, and they say so in ordinary words.
+    # This is checked before anything else, because continuing to process a turn
+    # that said "goodbye" is how a phone system ends up answering someone who
+    # has already gone.
+    if wants_to_end(raw_text):
+        ss["turns"].append({
+            "speaker": "customer", "text": raw_text, "channel": channel,
+            "voice": None, "eou": None, "redaction": None,
+            "stage": ss["call"].stage.value,
+        })
+        ss["states"].append({})
+        _record_handler_turn(ss, CALL_CLOSED, channel)
+        _end_call(ss, "The customer ended the call.")
+        return
+
     # Nothing is classified, scored or recorded until they agree to be recorded.
     if ss["consent"] is not ConsentState.GRANTED:
         _consent_turn(ss, raw_text, channel)
@@ -454,7 +478,7 @@ def _consent_turn(ss: dict, raw_text: str, channel: str) -> None:
     })
     ss["states"].append({})
 
-    reply = consent_response(decision, ss["consent_asked_twice"])
+    reply = consent_response(decision, ss["consent_asks"])
 
     if decision.state is ConsentState.GRANTED:
         # Consent given: the call moves on to finding out who is calling, and
@@ -473,11 +497,13 @@ def _consent_turn(ss: dict, raw_text: str, channel: str) -> None:
         ss["call"].stage = CallStage.CLOSED
 
     if decision.state is ConsentState.UNCLEAR:
-        # A second unclear answer is treated as a refusal by `response_for`;
-        # reflect that here so the call actually ends.
-        if ss["consent_asked_twice"]:
-            ss["consent"] = ConsentState.REFUSED
-        ss["consent_asked_twice"] = True
+        # Asked again. A non-answer never becomes a refusal on its own — only
+        # the customer saying no does that.
+        ss["consent_asks"] += 1
+        if ss["consent_asks"] >= MAX_CONSENT_ASKS:
+            # Out of asks. The call closes, but not as a refusal — the customer
+            # never said no, and the record must not claim they did.
+            ss["ended"] = "No answer to the recording question."
 
     if reply:
         ss["turns"].append({
@@ -520,6 +546,7 @@ def _reply_stream(ss: dict) -> Iterator[str]:
             sentiment=state.get("sentiment"),
             retrieved=state.get("retrieved"),
             account=state.get("account_request"),
+            history=_history_text(ss, turns=6),
         )
         produced = False
         for chunk in llm.stream_text(HANDLER_REPLY_SYSTEM, user,
@@ -532,6 +559,16 @@ def _reply_stream(ss: dict) -> Iterator[str]:
     # No model, or the model produced nothing: compose the reply from policy
     # ourselves, released a sentence at a time so the channel behaves the same
     # way. This is the path every demo runs on until a key is configured.
+    # A bare "yes" carries no signal of its own — it means whatever the handler
+    # just offered. Without a model to read the thread, that link has to be made
+    # here or the reply asks the customer what they need, one turn after
+    # offering it to them.
+    if is_affirmation(pending["customer_text"]):
+        previous = next((t["text"] for t in reversed(ss["turns"][:-1])
+                         if t["speaker"] == "agent"), "")
+        yield from _stream_sentences(confirm_offer(previous))
+        return
+
     composed = compose_reply(decision, state.get("financial_context"),
                              state.get("sentiment"), retrieved=state.get("retrieved"),
                              account=state.get("account_request"))

@@ -126,6 +126,7 @@ def _facts_for(account: Account, field: str) -> list[str]:
     Figures go through `inr`, so a customer hears ₹2,84,000 rather than a
     Western-grouped number in the wrong currency, and instalments are EMIs.
     """
+    plural = "s" if account.arrears_months != 1 else ""
     facts = [f"{account.label}, {account.masked_number}"]
     if field in ("balance", "other", "none", "statement"):
         if account.owed:
@@ -133,7 +134,7 @@ def _facts_for(account: Account, field: str) -> list[str]:
         else:
             facts.append(f"{inr(account.balance)} available")
     if field in ("arrears", "balance", "other") and account.arrears_months:
-        facts.append(f"{account.arrears_months} EMI(s) overdue, "
+        facts.append(f"{account.arrears_months} EMI{plural} overdue, "
                      f"{inr(account.arrears_amount)} to bring it up to date")
     if field in ("payment", "arrears", "other", "none") and account.monthly_payment:
         facts.append(f"an EMI of {inr(account.monthly_payment)} due on "

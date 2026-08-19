@@ -211,11 +211,22 @@ def test_agreement_is_recognised(text):
 
 
 @pytest.mark.parametrize("text", [
-    "no", "I'd rather you didn't", "please don't", "no I'm not comfortable with that",
-    "don't record me", "turn that off",
+    "no", "I'd rather you didn't", "please don't record it",
+    "no I'm not comfortable with that", "don't record me", "turn that off",
 ])
 def test_refusal_is_recognised(text):
     assert _heuristic(text).state is ConsentState.REFUSED
+
+
+@pytest.mark.parametrize("text", [
+    "I don't have the money to repay, what can I do?",
+    "I don't understand what you mean",
+    "I don't know how I'll manage this month",
+])
+def test_ordinary_negation_is_not_a_refusal(text):
+    """A bare "don't" once matched here, so a customer explaining she could not
+    pay her home loan was told the call was being ended."""
+    assert _heuristic(text).state is not ConsentState.REFUSED
 
 
 @pytest.mark.parametrize("text", [
@@ -229,20 +240,26 @@ def test_a_refusal_stops_the_call():
     decision = _heuristic("I'd rather you didn't")
     assert decision.call_over
     assert not decision.may_proceed
-    assert response_for(decision, asked_before=False)
+    assert response_for(decision, asks_so_far=0)
 
 
-def test_an_unclear_answer_is_clarified_once_then_treated_as_refusal():
+def test_an_unclear_answer_is_asked_again_but_never_becomes_a_refusal():
+    """A non-answer is not a no. Treating it as one hung up on a customer who
+    was engaging with the call, just not with the procedural question."""
     decision = _heuristic("what for?")
-    first = response_for(decision, asked_before=False)
-    second = response_for(decision, asked_before=True)
-    assert first != second, "asking the same question twice is not clarifying"
-    assert "end the call" in second.lower()
+    assert decision.state is ConsentState.UNCLEAR
+    assert not decision.call_over
+
+    first = response_for(decision, asks_so_far=0)
+    last = response_for(decision, asks_so_far=2)
+    assert first != last, "asking the identical question again is not clarifying"
+    assert "end the call" not in last.lower(), "a non-answer must not read as a refusal"
+    assert "branch" in last.lower(), "the customer needs a route that works"
 
 
 def test_consent_granted_produces_no_scripted_line():
     """The conversation proper begins; the handler does not read a confirmation."""
-    assert response_for(_heuristic("yes that's fine"), asked_before=False) is None
+    assert response_for(_heuristic("yes that's fine"), asks_so_far=0) is None
 
 
 # --------------------------------------------------------------------------- #
