@@ -470,6 +470,18 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
         parts.append("Would that help?")
         return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
 
+    # A product the caller does not hold. Answered plainly, and paired with what
+    # they do hold — the alternative is what stops "I can't see that" landing as
+    # "the bank has lost my account".
+    if account is not None and getattr(account, "decision", "none") == "unavailable":
+        parts = [opener, account.refusal_reason]
+        if account.alternative:
+            parts.append(account.alternative.rstrip(".") + ".")
+            parts.append("Would you like me to go through one of those?")
+        else:
+            parts.append("Is there something else I can help with?")
+        return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
+
     # Account facts are stated before anything else can short-circuit the reply.
     # They used to sit after the no-recommendation early return, so a plain
     # "how much do I owe?" — which triggers no vulnerability and retrieves no
@@ -583,6 +595,16 @@ def build_reply_prompt(customer_text: str, decision,
             ]
             if account.alternative:
                 lines.append(f"Then offer what you can do instead: {account.alternative}")
+        elif getattr(account, "decision", "none") == "unavailable":
+            lines += [
+                "THE CALLER HAS ASKED ABOUT A PRODUCT THEY DO NOT HOLD.",
+                f"Say plainly: {account.refusal_reason}",
+                "Do not read out figures from a different account, and do not "
+                "guess at which account they meant.",
+            ]
+            if account.alternative:
+                lines.append(f"Then tell them what is on the file: {account.alternative}, "
+                             "and ask which they would like to go through.")
         elif account.facts:
             lines += [
                 "Account facts you may state (already masked — use them as written, "

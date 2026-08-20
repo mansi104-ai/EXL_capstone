@@ -289,9 +289,17 @@ const prosody = {
 /* ------------------------------------------------------------------ *
  * The call loop                                                        *
  * ------------------------------------------------------------------ */
+/* How long the console will wait for Python to answer a committed turn before
+   it gives up and reopens the line. The pipeline is ten agents deep and the
+   reply is synthesised after it, so this is generous; the point is only that
+   "Thinking" can never be a terminal state. A call that stops listening without
+   saying so is worse than a slow one. */
+const REPLY_TIMEOUT_MS = 25000;
+
 const call = {
   running: false, speaking: false, engine: "", recognizer: null, webkit: null,
   committed: "", partial: "", lastSpeechAt: 0, evalTimer: null,
+  thinking: false, thinkingSince: 0,
 
   setStatus(text, cls) {
     els.status.textContent = text;
@@ -422,6 +430,22 @@ const call = {
 
   evaluate() {
     if (!this.running || this.speaking) return;
+
+    /* A turn is already with Python. Keep transcribing — the customer may well
+       carry on talking — but do not commit a second turn on top of the first,
+       or one utterance becomes two pipeline runs racing each other. */
+    if (this.thinking) {
+      if (performance.now() - this.thinkingSince > REPLY_TIMEOUT_MS) {
+        this.thinking = false;
+        this.fail("The handler's reply did not come back in time. The line is still "
+                  + "open — the answer is in the transcript above if it arrived late.");
+        this.setStatus("Listening", "on");
+        this.lastSpeechAt = performance.now();
+        this.render();
+      }
+      return;
+    }
+
     const text = (this.committed + " " + this.partial).trim();
     const { score, reason } = scoreCompleteness(text);
     const needed = requiredSilenceMs(score, ARGS.distress || 0);
@@ -448,6 +472,8 @@ const call = {
     this.lastSpeechAt = performance.now();
     const measurements = prosody.measure();
     prosody.reset();
+    this.thinking = true;
+    this.thinkingSince = performance.now();
     this.setStatus("Thinking", "speaking");
     els.transcript.innerHTML = '<span class="muted">Sent — GuardianCX is responding…</span>';
     Streamlit.setValue({
@@ -457,12 +483,39 @@ const call = {
     });
   },
 
-  /* The reply is synthesised server-side (Azure neural voice) and arrives as
-     base64 audio. Recognition is muted for the duration of playback — without
-     that, the agent transcribes its own voice and answers itself. */
-  speak(audioB64, id) {
-    if (!audioB64 || id === lastSpokenId) return;
+  /* Python has answered the committed turn. The id changes once per handler
+     line and is what releases the console from "Thinking" — deliberately not
+     the audio, because the audio is the part most likely to be missing. Speech
+     synthesis can be unconfigured, out of quota, or simply fail, and when the
+     exit from "Thinking" hung on a blob of MP3 arriving, any of those froze the
+     call: the recogniser was still running, the customer was still talking, and
+     the console showed "Thinking" until the tab was closed.
+
+     So a reply with no audio is a text-only reply, not a missing one. The line
+     reopens either way; only the playback is skipped. */
+  replyReady(audioB64, id) {
+    if (!id || id === lastSpokenId) return;
+
+    /* First render after a fresh mount. Whatever the last reply was, it was
+       spoken to a console that no longer exists, so it is adopted as already
+       heard rather than replayed — a reload should not shout the previous
+       answer at the handler. */
+    if (lastSpokenId === null && !this.running) {
+      lastSpokenId = id;
+      return;
+    }
+
     lastSpokenId = id;
+    this.thinking = false;
+
+    if (!audioB64) {
+      this.lastSpeechAt = performance.now();
+      if (this.running) { this.setStatus("Listening", "on"); this.render(); }
+      return;
+    }
+
+    // Recognition is muted for the duration of playback — without that, the
+    // agent transcribes its own voice and answers itself.
     this.speaking = true;
     this.committed = ""; this.partial = "";
     this.setStatus("Speaking", "speaking");
@@ -471,6 +524,7 @@ const call = {
       this.speaking = false;
       this.lastSpeechAt = performance.now();
       if (this.running) { this.setStatus("Listening", "on"); this.render(); }
+      else this.setStatus("Idle", "");
     };
     els.player.onended = resume;
     els.player.onerror = resume;
@@ -479,6 +533,7 @@ const call = {
 
   stop() {
     this.running = false;
+    this.thinking = false;
     if (this.evalTimer) clearInterval(this.evalTimer);
     this.evalTimer = null;
     if (this.recognizer) {
@@ -508,7 +563,7 @@ els.stop.onclick = () => call.stop();
 window.addEventListener("message", (event) => {
   if (!event.data || event.data.type !== "streamlit:render") return;
   ARGS = event.data.args || {};
-  if (ARGS.speak_audio) call.speak(ARGS.speak_audio, ARGS.speak_id);
+  if (ARGS.speak_id) call.replyReady(ARGS.speak_audio, ARGS.speak_id);
   if (ARGS.stop_signal && call.running) call.stop();
   Streamlit.setHeight(document.body.scrollHeight + 20);
 });

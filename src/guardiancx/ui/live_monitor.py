@@ -190,10 +190,30 @@ def live_monitor() -> None:
         _signal_rail(ss)
 
     with left:
-        _session_header(ss)
-        if mode == "Call" and not ss["ended"]:
-            _call_controls(ss)
-        _conversation(ss, mode)
+        # Streamlit addresses an element by where it sits in the tree, and a
+        # custom component whose position moves is torn down and rebuilt — the
+        # iframe reloads, the recogniser dies, and the console comes back sitting
+        # on "Start call" mid-conversation.
+        #
+        # The header grows a row the moment the caller is verified ("Account on
+        # file"), and another when the call is saved. Both sit above the console,
+        # so passing verification silently shifted it down one slot and dropped
+        # the live call — at the exact moment the call became useful.
+        #
+        # Claiming the slots up front fixes the console's address for the life of
+        # the session: whatever the header decides to show, it grows inside its
+        # own container and the console never moves.
+        header = st.container()
+        call_area = st.container()
+        transcript = st.container()
+
+        with header:
+            _session_header(ss)
+        with call_area:
+            if mode == "Call" and not ss["ended"]:
+                _call_controls(ss)
+        with transcript:
+            _conversation(ss, mode)
 
     # The chat box is pinned to the window, so it lives outside the columns.
     if mode == "Chat" and not ss["ended"]:
@@ -285,28 +305,40 @@ def _call_controls(ss: dict) -> None:
     speech = get_speech()
     status = speech.status()
 
+    # Same reasoning as the containers in `live_monitor`, one level down: these
+    # notices come and go depending on whether a token could be minted this run,
+    # and any one of them appearing above the console would move it. The notices
+    # render into a slot claimed before the console, so they read above it on the
+    # page without ever sitting above it in the tree.
+    notices = st.container()
+    console = st.container()
+
     token, region = "", ""
     if status["available"]:
         try:
             token, region = speech.issue_token()
         except Exception as exc:  # noqa: BLE001
-            st.warning("Speech recognition is unavailable, so the call will use the "
-                       "browser's built-in recogniser instead.")
+            with notices:
+                st.warning("Speech recognition is unavailable, so the call will use "
+                           "the browser's built-in recogniser instead.")
             log.info("Speech token could not be issued: %s", exc)
     else:
-        st.info(
-            "Speech services are not configured, so the call will use the browser's "
-            "built-in recogniser (Chrome or Edge) and the reply will be text only."
-        )
+        with notices:
+            st.info(
+                "Speech services are not configured, so the call will use the "
+                "browser's built-in recogniser (Chrome or Edge) and the reply will "
+                "be text only."
+            )
 
-    result = voice_console(
-        token=token,
-        region=region,
-        distress=_current_distress(ss),
-        speak_audio=ss["reply_audio"],
-        speak_id=ss["reply_id"],
-        key=f"voice_{ss['conv_id']}",
-    )
+    with console:
+        result = voice_console(
+            token=token,
+            region=region,
+            distress=_current_distress(ss),
+            speak_audio=ss["reply_audio"],
+            speak_id=ss["reply_id"],
+            key=f"voice_{ss['conv_id']}",
+        )
 
     # A committed utterance arrives once; the same value is replayed on every
     # rerun, so the sequence number is what distinguishes new speech from an echo.
@@ -552,17 +584,31 @@ def _consent_turn(ss: dict, raw_text: str, channel: str) -> None:
 
 
 def _speak(ss: dict, text: str) -> None:
-    """Synthesise a line for playback on the call channel."""
+    """Synthesise a line for playback on the call channel.
+
+    The id is minted for every handler line, before synthesis is attempted and
+    whether or not it succeeds, because the console uses it as the signal that
+    the turn has been answered. It used to be set only alongside audio, which
+    tied the browser's whole state machine to Azure being reachable: with speech
+    unconfigured, out of quota, or simply failing, the id never changed, the
+    console never left "Thinking", and the call froze mid-sentence with no way
+    back. A reply nobody can hear is a degraded call. A console that stops
+    listening without saying so is a dead one.
+    """
+    ss["reply_audio"] = None
+    ss["reply_id"] = uuid.uuid4().hex[:12]
+
     speech = get_speech()
     if not speech.available:
         return
     try:
         audio = speech.synthesize(text, emotion=_current_emotion(ss))
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Reply could not be synthesised; the console will show it as "
+                    "text only (%s).", exc)
         return
     if audio:
         ss["reply_audio"] = audio
-        ss["reply_id"] = uuid.uuid4().hex[:12]
 
 
 def _reply_stream(ss: dict) -> Iterator[str]:
@@ -623,13 +669,25 @@ def _stream_sentences(text: str) -> Iterator[str]:
             time.sleep(0.12)
 
 
+# What the handler says when the draft comes back empty. Every generator behind
+# the reply can legitimately produce nothing — no model configured, a stream that
+# failed, a composer with no facts and no policy to work from — and on a phone
+# call the result of that was silence: no line recorded, so no reply id, so a
+# console waiting on a turn that was never going to be answered. Silence is not
+# an acceptable output of a support line, so there is always a line.
+EMPTY_REPLY = ("Sorry — bear with me one moment. Could you tell me a little more "
+               "about what you need?")
+
+
 def _finalise_reply(ss: dict, reply: str) -> None:
     """Record the streamed handler reply, and speak it on the call channel."""
     pending = ss["pending"]
     ss["pending"] = None
     reply = (reply or "").strip()
-    if reply:
-        _record_handler_turn(ss, reply, pending["channel"])
+    if not reply:
+        log.warning("The reply draft came back empty; falling back to a holding line.")
+        reply = EMPTY_REPLY
+    _record_handler_turn(ss, reply, pending["channel"])
 
 
 # --------------------------------------------------------------------------- #

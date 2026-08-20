@@ -33,7 +33,8 @@ from guardiancx.finance.accounts import (
 from guardiancx.guardrails.base import GuardrailContext
 from guardiancx.guardrails.disclosure import DisclosureGuardrail
 
-WIDOW = "CUST-4471"      # Margaret Hughes — joint mortgage, husband's sole card
+WIDOW = "CUST-4471"      # Meera Deshpande — joint home loan, husband's sole card
+CARDHOLDER = "CUST-6612"  # Arjun Malhotra — home loan and a credit card of his own
 DECEASED = "CUST-4472"   # Robert Hughes
 
 
@@ -132,6 +133,41 @@ def test_the_caller_may_hear_their_own_joint_account():
                        "joint", "test")
     assert request.decision == "disclose"
     assert request.facts
+
+
+def test_a_product_the_caller_does_not_hold_is_not_answered_from_another_one():
+    """The caller has no credit card. The answer is that, not her home loan.
+
+    The resolver used to fall back to whichever account was in the most trouble
+    whenever it could not match the product named, so this question was answered
+    with the joint home loan's arrears — an unprompted disclosure about an
+    account the caller had not asked about.
+    """
+    request = _resolve(WIDOW, "Can you check my credit card limit?", "limit",
+                       "self", "test")
+    assert request.decision == "unavailable"
+    assert not request.facts
+    joined = " ".join(request.facts) + " " + request.refusal_reason
+    assert "arrears" not in joined.lower() and "overdue" not in joined.lower()
+    # And she is told what she does hold, so "I can't see that" is not the whole
+    # answer.
+    assert "home loan" in request.alternative.lower()
+
+
+def test_the_named_product_wins_over_the_one_in_the_most_trouble():
+    """Asked about the card, answer about the card — not the loan in arrears."""
+    request = _resolve(CARDHOLDER, "How much do I owe on my credit card?", "balance",
+                       "self", "test")
+    assert request.decision == "disclose"
+    assert "credit card" in request.facts[0].lower()
+
+
+def test_a_credit_limit_is_a_question_the_system_can_answer():
+    request = _resolve(CARDHOLDER, "What's my credit card limit?", "limit",
+                       "self", "test")
+    assert request.decision == "disclose"
+    joined = " ".join(request.facts).lower()
+    assert "limit" in joined and "available" in joined
 
 
 def test_a_full_account_number_is_never_read_out_even_to_its_owner():

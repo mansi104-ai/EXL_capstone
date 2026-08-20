@@ -220,3 +220,91 @@ def test_a_session_whose_turns_and_states_disagree_is_reset():
 
     assert not app.exception, [e.value for e in app.exception]
     assert app.session_state["live"]["turns"] == []
+
+
+# --------------------------------------------------------------------------- #
+# The console must never be left waiting
+# --------------------------------------------------------------------------- #
+# The browser console shows "Thinking" from the moment it commits a turn until
+# Python hands back a new reply id. That id is therefore the only thing standing
+# between a working call and a frozen one: if it does not change, the console
+# waits forever, with the recogniser still running and the customer still
+# talking into a line that has stopped answering.
+#
+# These drive the session functions directly rather than through AppTest,
+# because what is being asserted is the state the component is handed, not what
+# is drawn on the page.
+from guardiancx.ui import live_monitor as LM  # noqa: E402
+
+
+# Consent, name, date of birth — the spine every call runs before it will
+# discuss anything.
+OPENING = ("Yes, that's fine.", "It's Meera Deshpande", "12th March 1958")
+
+
+def _walk_opening(ss: dict) -> list[str]:
+    """Take the call through its opening, collecting the id after each turn."""
+    ids = []
+    for line in OPENING:
+        LM._customer_turn(ss, line, channel="voice")
+        ids.append(ss["reply_id"])
+    return ids
+
+
+def _answered_call() -> dict:
+    """A voice call taken through consent, name and date of birth."""
+    ss = LM._new_session()
+    _walk_opening(ss)
+    return ss
+
+
+def test_every_handler_line_gives_the_console_a_fresh_reply_id():
+    ids = _walk_opening(LM._new_session())
+    assert all(ids), "a handler line left the console with no reply id"
+    assert len(set(ids)) == len(ids), "a repeated reply id would freeze the console"
+
+
+def test_a_failed_synthesis_still_releases_the_console(monkeypatch):
+    """Azure being out of quota is a degraded call, not a dead one.
+
+    The id used to be minted only alongside audio, so any synthesis failure left
+    the console showing "Thinking" for the rest of the call.
+    """
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("speech quota exhausted")
+
+    monkeypatch.setattr(LM.get_speech(), "synthesize", explode)
+
+    ss = LM._new_session()
+    ids = _walk_opening(ss)
+
+    assert ss["reply_audio"] is None, "no audio should have survived the failure"
+    assert all(ids) and len(set(ids)) == len(ids)
+    assert ss["call"].stage.value == "serving", "the call still has to progress"
+
+
+def test_an_empty_draft_still_says_something():
+    """Every generator behind the reply can produce nothing. Silence on a phone
+    call is not an acceptable output, and it also strands the console."""
+    ss = _answered_call()
+    LM._customer_turn(ss, "Can you check my credit card limit?", channel="voice")
+    assert ss["pending"], "a serving turn should defer its reply to the render pass"
+
+    before = ss["reply_id"]
+    LM._finalise_reply(ss, "")
+
+    assert ss["turns"][-1]["speaker"] == "agent"
+    assert ss["turns"][-1]["text"].strip()
+    assert ss["reply_id"] != before, "the console was never told the turn was answered"
+
+
+def test_the_serving_reply_answers_the_product_that_was_asked_about():
+    """She has no credit card, so she is told that — not read her home loan."""
+    ss = _answered_call()
+    LM._customer_turn(ss, "Can you check my credit card limit?", channel="voice")
+    reply = "".join(LM._reply_stream(ss))
+    LM._finalise_reply(ss, reply)
+
+    spoken = ss["turns"][-1]["text"].lower()
+    assert "credit card" in spoken
+    assert "overdue" not in spoken and "arrears" not in spoken

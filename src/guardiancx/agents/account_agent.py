@@ -47,6 +47,7 @@ from ..finance.accounts import (
     get_customer,
     inr,
 )
+from ..finance.taxonomy import Product
 from ..services.claude_client import EFFORT_ANALYSIS, get_claude
 from ..utils.logging import get_logger
 from .prompts import ACCOUNT_ACCESS_SYSTEM
@@ -61,7 +62,7 @@ class AccountRequest(BaseModel):
     asked: bool = False                 # did they ask for account data at all?
     field: str = ""                     # balance | arrears | payment | number | transactions …
     subject: str = "self"               # self | joint | third_party | unknown
-    decision: str = "none"              # disclose | partial | refuse | none
+    decision: str = "none"              # disclose | partial | refuse | unavailable | none
     facts: list[str] = Field(default_factory=list)   # masked facts the handler may state
     refusal_reason: str = ""
     alternative: str = ""               # the route that does exist
@@ -78,8 +79,8 @@ _SCHEMA = {
         "asked": {"type": "boolean"},
         "field": {
             "type": "string",
-            "enum": ["balance", "arrears", "payment", "account_number", "sort_code",
-                     "transactions", "statement", "other", "none"],
+            "enum": ["balance", "limit", "arrears", "payment", "account_number",
+                     "sort_code", "transactions", "statement", "other", "none"],
         },
         "subject": {"type": "string", "enum": ["self", "joint", "third_party", "unknown"]},
         "reasoning": {"type": "string"},
@@ -109,6 +110,11 @@ _FIELD_CUES: list[tuple[str, re.Pattern]] = [
         r"\b(?:account|card|reference|policy)\s*(?:number|no\.?)\b|\bfull\s+number\b"
         r"|\blong\s+number\b|\bthe\s+numbers?\s+(?:for|on)\b", re.IGNORECASE)),
     ("sort_code", re.compile(r"\bsort\s*code\b", re.IGNORECASE)),
+    # Ahead of "balance": "how much is my limit" is a question about the limit,
+    # and the balance cue would otherwise claim it on "how much".
+    ("limit", re.compile(r"\blimit\b|\bavailable\s+credit\b|\bcredit\s+available\b"
+                         r"|\bhow\s+much\s+(?:can|could)\s+i\s+(?:spend|borrow)\b",
+                         re.IGNORECASE)),
     ("arrears", re.compile(r"\barrears\b|\bbehind\b|\bmissed\b|\bcatch\s+up\b", re.IGNORECASE)),
     ("payment", re.compile(r"\bpayment\b|\bdirect debit\b|\bwhen is it due\b|\bdue\b",
                            re.IGNORECASE)),
@@ -118,6 +124,56 @@ _FIELD_CUES: list[tuple[str, re.Pattern]] = [
                                 re.IGNORECASE)),
     ("statement", re.compile(r"\bstatement\b", re.IGNORECASE)),
 ]
+
+
+# How customers name each product out loud. Nobody says "credit_card"; they say
+# "my card", "the credit card", "my home loan". Recognising the product named is
+# what lets the resolver tell *which* of the caller's accounts they mean from an
+# account they do not hold at all — two very different answers.
+#
+# Ordered: the specific pattern must win over the general one, so "credit card"
+# is not claimed by the bare "card".
+_PRODUCT_WORDS: list[tuple[Product, re.Pattern, str]] = [
+    (Product.CREDIT_CARD,
+     re.compile(r"\bcredit\s*card\b|\bcard\b", re.IGNORECASE), "a credit card"),
+    (Product.MORTGAGE,
+     re.compile(r"\bmortgage\b|\bhome\s*loan\b|\bhousing\s*loan\b", re.IGNORECASE),
+     "a home loan"),
+    (Product.PERSONAL_LOAN,
+     re.compile(r"\bpersonal\s*loan\b", re.IGNORECASE), "a personal loan"),
+    (Product.CAR_FINANCE,
+     re.compile(r"\bcar\s*(?:loan|finance)\b|\bauto\s*loan\b", re.IGNORECASE),
+     "car finance"),
+    (Product.OVERDRAFT,
+     re.compile(r"\boverdraft\b", re.IGNORECASE), "an overdraft"),
+    (Product.SAVINGS,
+     re.compile(r"\bsavings?\b|\bfixed\s*deposit\b|\bfd\b", re.IGNORECASE),
+     "a savings account"),
+    (Product.CURRENT_ACCOUNT,
+     re.compile(r"\bcurrent\s*account\b|\bchecking\b", re.IGNORECASE),
+     "a current account"),
+    (Product.PENSION,
+     re.compile(r"\bpension\b", re.IGNORECASE), "a pension"),
+    (Product.INSURANCE,
+     re.compile(r"\binsurance\b", re.IGNORECASE), "an insurance policy"),
+]
+
+
+def named_product(text: str) -> tuple[Optional[Product], str]:
+    """The product the caller named, and how to say it back to them."""
+    for product, pattern, spoken in _PRODUCT_WORDS:
+        if pattern.search(text):
+            return product, spoken
+    return None, ""
+
+
+def _spoken_list(items: list[str]) -> str:
+    """Read a short list the way a person would say it."""
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
 
 
 def _facts_for(account: Account, field: str) -> list[str]:
@@ -139,20 +195,58 @@ def _facts_for(account: Account, field: str) -> list[str]:
     if field in ("payment", "arrears", "other", "none") and account.monthly_payment:
         facts.append(f"an EMI of {inr(account.monthly_payment)} due on "
                      f"{account.next_payment_date}")
+    if field == "limit":
+        if account.credit_limit:
+            available = max(0.0, account.credit_limit - account.owed)
+            facts.append(f"a limit of {inr(account.credit_limit)}")
+            facts.append(f"{inr(available)} of that still available")
+        else:
+            facts.append("no credit limit — it isn't a card or an overdraft")
     if field == "transactions":
         for txn in account.transactions[:3]:
             facts.append(f"{txn.date}: {txn.description} {inr(abs(txn.amount))}")
     return facts
 
 
-def _relevant_account(accounts: list[Account], text: str) -> Optional[Account]:
-    """Pick the account the customer most likely means."""
+def _relevant_account(accounts: list[Account], text: str,
+                      field: str = "other") -> Optional[Account]:
+    """Pick the account the customer most likely means, or None if they named
+    one they do not hold.
+
+    A caller who names a product means that product. The previous version
+    matched on `product.value.replace("_", " ")` — the literal string "credit
+    card" — and when that missed it fell through to whichever account was in the
+    most trouble. So "can you check my credit card limit", asked by a customer
+    with no card, was answered with her joint home loan: three EMIs overdue,
+    ₹74,550 to bring it up to date. Fluent, confident, and about an account she
+    had not mentioned.
+
+    Answering the wrong account is a disclosure, not a near-miss. If the product
+    named is not held, this returns None and the caller is told so.
+    """
     if not accounts:
         return None
+
+    wanted, _ = named_product(text)
+    if wanted is not None:
+        held = [a for a in accounts if a.product is wanted]
+        if not held:
+            return None
+        return max(held, key=lambda a: (a.arrears_months, a.owed))
+
     low = text.lower()
     for account in accounts:
-        if account.product.value.replace("_", " ") in low or account.label.lower() in low:
+        if account.label.lower() in low:
             return account
+
+    # No product named. For a field only some products can answer, prefer one
+    # that can — "what's my limit" should not be answered from a savings account
+    # just because it is the one in the most trouble.
+    if field == "limit":
+        with_limit = [a for a in accounts if a.credit_limit]
+        if with_limit:
+            return max(with_limit, key=lambda a: a.credit_limit)
+
     # Otherwise the one in the most trouble — that is what the call is about.
     return max(accounts, key=lambda a: (a.arrears_months, a.owed))
 
@@ -190,7 +284,21 @@ def _resolve(customer_id: str, text: str, field: str, subject: str,
         return AccountRequest(asked=True, field=field, subject="unknown", decision="none",
                               source=source)
 
-    account = _relevant_account(own, text)
+    account = _relevant_account(own, text, field)
+
+    # They named a product that is not on their file. Say so, and say what is —
+    # a customer told only "I can't see that" concludes the bank has lost the
+    # account, and rings back angrier.
+    if account is None:
+        _, spoken = named_product(text)
+        held = _spoken_list([a.label.lower() for a in own])
+        return AccountRequest(
+            asked=True, field=field, subject=subject, decision="unavailable",
+            refusal_reason=f"I can't see {spoken or 'that account'} on your name here.",
+            alternative=f"What I do have for you is {held}" if held else "",
+            source=source,
+        )
+
     if field in _NEVER_SPOKEN:
         return AccountRequest(
             asked=True, field=field, subject=subject, decision="partial",
@@ -288,6 +396,6 @@ def run(state: AgentState) -> AgentState:
             "agent": "account_access",
             "summary": f"[{request.source}] {request.field} · {request.subject} · "
                        f"{request.decision}"
-                       + (f" — {request.refusal_reason}" if request.refused else ""),
+                       + (f" — {request.refusal_reason}" if request.refusal_reason else ""),
         })
     return state
