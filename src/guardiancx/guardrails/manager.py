@@ -14,7 +14,10 @@ The output set includes a finance-specific check, `prohibited_action`, which
 blocks advice that would cause harm regardless of how well grounded it is —
 offering credit to a customer disclosing gambling harm, for instance. The reply
 set includes `data_disclosure`, which blocks any identifier from the account book
-appearing in what the customer is told.
+appearing in what the customer is told; `credential_request`, which blocks a
+reply that asks the customer for a PIN, a password or a one-time passcode — the
+one thing an approved challenge flow must never do; and `approved_wording`,
+which holds an outbound call to the wording its treatment strategy authorised.
 
 Extending: add a Guardrail subclass and register it in `default_input_guardrails`
 or `default_output_guardrails`. Optionally, a NeMo Guardrails config can be
@@ -32,6 +35,7 @@ from ..utils.types import GuardrailReport, PolicyChunk, Recommendation
 from .approval import ApprovalGuardrail
 from .base import Guardrail, GuardrailContext
 from .clarity import ClarityGuardrail
+from .credential_request import CredentialRequestGuardrail
 from .disclosure import DisclosureGuardrail
 from .confidence import ConfidenceGuardrail
 from .hallucination import HallucinationGuardrail
@@ -39,6 +43,7 @@ from .injection import InjectionGuardrail
 from .pii import PIIGuardrail
 from .prohibited_action import ProhibitedActionGuardrail
 from .toxicity import ToxicityGuardrail
+from .wording import ApprovedWordingGuardrail
 
 log = get_logger("guardrails.manager")
 
@@ -50,10 +55,15 @@ def default_input_guardrails() -> list[Guardrail]:
 def default_reply_guardrails() -> list[Guardrail]:
     """Guardrails on the customer-facing draft.
 
-    Disclosure runs first and blocks; clarity runs second and warns. A reply that
-    leaks an account number is not improved by being easy to understand.
+    Ordered by what cannot be undone. Asking for a credential is worst — the
+    customer may answer before the sentence has finished, and the answer is gone.
+    Disclosure is next: a leaked identifier cannot be recalled once spoken, but
+    at least the harm needs the wrong person to be listening. Clarity warns
+    rather than blocks. A reply that leaks an account number is not improved by
+    being easy to understand.
     """
-    return [DisclosureGuardrail(), ClarityGuardrail()]
+    return [CredentialRequestGuardrail(), ApprovedWordingGuardrail(),
+            DisclosureGuardrail(), ClarityGuardrail()]
 
 
 def default_output_guardrails() -> list[Guardrail]:
@@ -120,15 +130,25 @@ class GuardrailManager:
         return report
 
     def run_reply(self, reply: str, journey=None,
-                  account_refused: bool = False) -> GuardrailReport:
+                  account_refused: bool = False, strategy=None,
+                  language: str = "en",
+                  retrieved: Optional[list[PolicyChunk]] = None) -> GuardrailReport:
         """Check the draft the customer would hear.
 
         Runs after the reply is composed rather than inside the graph, because
         the reply is written from the recommendation and does not exist yet when
         the output guardrails run.
+
+        `strategy`, `language` and `retrieved` are what an outbound call adds:
+        the approved wording check needs to know which strategy the call is
+        running under, which language the customer is hearing, and which clauses
+        were actually retrieved to draw wording from. An inbound call passes none
+        of them and that guardrail stands down.
         """
         ctx = GuardrailContext(text="", reply=reply, journey=journey,
-                               account_refused=account_refused)
+                               account_refused=account_refused,
+                               strategy=strategy, language=language,
+                               retrieved=list(retrieved or []))
         report = GuardrailReport()
         for g in self.reply_guardrails:
             report.results.append(g.check(ctx))

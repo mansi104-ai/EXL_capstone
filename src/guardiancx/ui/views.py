@@ -35,6 +35,7 @@ from ..services.synthetic_data import list_conversations
 from ..utils.types import Driver, Recommendation, RiskLevel
 from . import charts as CH
 from . import components as C
+from .collections import collections_queue  # noqa: F401  (registered in app.py)
 
 DRIVERS = [d.value for d in Driver]
 

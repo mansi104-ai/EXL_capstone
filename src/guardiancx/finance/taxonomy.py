@@ -1,17 +1,18 @@
 """The finance domain taxonomy.
 
 A general-purpose vulnerability classifier can tell you *that* a customer is
-struggling. It cannot tell you that a customer three EMIs behind on a home loan,
-choosing between the electricity bill and the instalment, is owed forbearance
-under the RBI Fair Practices Code — and that a recovery call to them after 7pm,
-or an offer of a top-up loan, would breach it.
+struggling. It cannot tell you that a customer three instalments behind on a home
+loan, choosing between the DEWA bill and the instalment, is owed forbearance
+under the CBUAE Consumer Protection Standards — and that a collections call to
+them after 20:00, a call to their sponsor, or an offer of a top-up loan, would
+breach the bank's approved treatment strategy.
 
 That gap is the niche. This module encodes it in four parts:
 
 * **Product** — what the customer holds, because the obligations differ. A
-  credit card sits under the RBI Master Direction on Credit and Debit Cards; a
-  savings account under the Master Circular on Customer Service; a home loan
-  under the Fair Practices Code. The same disclosure means different things
+  personal loan sits under CBUAE Circular 29/2011 on loans to individuals; a
+  mortgage under the Mortgage Loan Regulations 31/2013; a deposit account under
+  the Consumer Protection Standards. The same disclosure means different things
   against each.
 * **Journey** — what the conversation is *for*. Harm concentrates in a handful
   of journeys (collections, bereavement, scam, forbearance), and the journey is
@@ -25,13 +26,23 @@ That gap is the niche. This module encodes it in four parts:
   guidance can be traced to an obligation rather than to a tone of voice.
 
 A note on the four drivers. Health, life events, resilience and capability are
-not an RBI construct — they come from the UK regulator's vulnerability guidance,
-which is the most fully worked-out articulation of the idea anywhere. Pan Indian
+not a CBUAE construct — they come from the UK regulator's vulnerability guidance,
+which is the most fully worked-out articulation of the idea anywhere. Gulf Union
 Bank adopts them as **its own** framework for identifying customers at risk, and
-grounds the *obligations* that follow in Indian instruments: the RBI Charter of
-Customer Rights, the Fair Practices Code, the Master Circular on Customer
-Service, and the Integrated Ombudsman Scheme. That split is deliberate and worth
-being explicit about: the taxonomy is the bank's, the duties are the regulator's.
+grounds the *obligations* that follow in UAE instruments: the CBUAE Consumer
+Protection Regulation (Circular 8/2020) and the Consumer Protection Standards
+issued under it, Circular 29/2011 on loans to individuals, the Mortgage Loan
+Regulations 31/2013, and Sanadak, the independent Ombudsman Unit for banking and
+insurance. That split is deliberate and worth being explicit about: the taxonomy
+is the bank's, the duties are the regulator's.
+
+A second note, on the borrower base. A large share of these customers are
+expatriate residents whose right to remain is tied to employment. Job loss is
+therefore not only an income shock: it starts a visa clock, it can freeze a
+salary-transfer account, and it makes the customer reachable for a shorter time
+than the arrears will take to clear. Nothing in a UK or Indian collections
+playbook models that, and it is the single most consequential fact about
+collections in this market.
 
 Everything here is deterministic and inspectable. The LLM classifier in
 `agents/financial_context_agent.py` proposes; this taxonomy defines the
@@ -75,18 +86,18 @@ PRODUCT_LABELS: dict[Product, str] = {
     Product.UNKNOWN: "Not yet identified",
 }
 
-# The RBI instrument that governs each product, shown in the guidance panel so a
+# The CBUAE instrument that governs each product, shown in the guidance panel so a
 # handler can see which rulebook the advice is grounded in.
 PRODUCT_SOURCEBOOK: dict[Product, str] = {
-    Product.CURRENT_ACCOUNT: "Master Circular on Customer Service",
-    Product.SAVINGS: "Master Circular on Customer Service",
-    Product.CREDIT_CARD: "MD on Credit & Debit Cards",
-    Product.PERSONAL_LOAN: "Fair Practices Code",
-    Product.MORTGAGE: "Fair Practices Code (home loans)",
-    Product.OVERDRAFT: "Master Circular on Customer Service",
-    Product.CAR_FINANCE: "Fair Practices Code",
-    Product.PENSION: "Master Circular on Customer Service",
-    Product.INSURANCE: "IRDAI Protection of Policyholders' Interests",
+    Product.CURRENT_ACCOUNT: "CBUAE Consumer Protection Standards",
+    Product.SAVINGS: "CBUAE Consumer Protection Standards",
+    Product.CREDIT_CARD: "CBUAE Circular 29/2011 · Consumer Protection Standards",
+    Product.PERSONAL_LOAN: "CBUAE Circular 29/2011 (loans to individuals)",
+    Product.MORTGAGE: "CBUAE Mortgage Loan Regulations 31/2013",
+    Product.OVERDRAFT: "CBUAE Consumer Protection Standards",
+    Product.CAR_FINANCE: "CBUAE Circular 29/2011 (car loans)",
+    Product.PENSION: "CBUAE Consumer Protection Standards",
+    Product.INSURANCE: "CBUAE insurance regulations (Consumer Protection)",
     Product.UNKNOWN: "—",
 }
 
@@ -176,49 +187,62 @@ ACUTE_STRESS: set[StressIndicator] = {
 # --------------------------------------------------------------------------- #
 REGULATORY_MAP: dict[Journey, list[str]] = {
     Journey.ARREARS_COLLECTIONS: [
-        "RBI Fair Practices Code — no coercive recovery; contact only between "
-        "08:00 and 19:00",
-        "RBI Master Direction on Outsourcing — conduct of recovery agents",
-        "RBI Charter of Customer Rights — Right to Fair Treatment",
+        "CBUAE Consumer Protection Standards — collection contact must be at "
+        "reasonable times, free of harassment, and directed only at the customer",
+        "Gulf Union Bank approved treatment strategy — contact 09:00–20:00 Gulf "
+        "Standard Time, never on a Friday between 12:00 and 13:30",
+        "CBUAE Consumer Protection Regulation 8/2020 — fair treatment of consumers",
+        "Al Etihad Credit Bureau reporting — the customer must be told what will "
+        "be reported and when",
     ],
     Journey.FORBEARANCE_REQUEST: [
-        "RBI Fair Practices Code — restructuring and relief where hardship is genuine",
-        "RBI Resolution Framework for stressed personal loans",
+        "CBUAE Consumer Protection Standards — restructuring and relief where "
+        "financial hardship is genuine",
+        "CBUAE Circular 29/2011 — debt burden ratio and repayment capacity on any "
+        "restructured facility",
+        "Federal Decree-Law 19/2019 on Insolvency — the customer's right to a "
+        "court-supervised settlement of personal debts",
     ],
     Journey.BEREAVEMENT_ESTATE: [
-        "RBI settlement of claims of deceased depositors — simplified procedure, "
-        "settlement within 15 days of a complete claim",
-        "RBI Master Circular on Customer Service — nomination and survivorship",
+        "CBUAE Consumer Protection Standards — a documented deceased-customer "
+        "process, and no charges accruing while it runs",
+        "UAE succession — accounts are released against a succession certificate "
+        "or a registered will; the bank states the process, never who inherits",
     ],
     Journey.FRAUD_SCAM: [
-        "RBI limiting customer liability in unauthorised electronic transactions "
-        "(2017) — zero liability where the customer reports promptly",
-        "RBI Charter of Customer Rights — Right to Privacy",
+        "CBUAE Consumer Protection Standards — liability for unauthorised "
+        "transactions where the customer reports promptly",
+        "CBUAE Retail Payment Services regulation — payment stop and recall",
     ],
     Journey.AFFORDABILITY_SHOCK: [
-        "RBI Fair Practices Code — assess repayment capacity before lending",
-        "RBI Charter of Customer Rights — Right to Suitability",
+        "CBUAE Circular 29/2011 — assess repayment capacity before lending; the "
+        "debt burden ratio cap applies to a restructure as much as to a new loan",
+        "Wage Protection System — a salary-transfer loan follows a salary that "
+        "may have stopped; confirm before assuming non-payment is a refusal",
     ],
     Journey.GAMBLING_HARM: [
-        "RBI Charter of Customer Rights — Right to Suitability",
-        "Pan Indian Bank vulnerable-customer framework — addiction as a health driver",
+        "CBUAE Consumer Protection Standards — suitability, and no credit offered "
+        "into a disclosed harm",
+        "Gulf Union Bank vulnerable-customer framework — addiction as a health driver",
     ],
     Journey.THIRD_PARTY_ACCESS: [
-        "RBI Master Circular on Customer Service — mandates, nomination and "
-        "operation by a third party",
-        "Rights of Persons with Disabilities Act 2016 — reasonable accommodation",
+        "CBUAE Consumer Protection Standards — third-party mandates and consumer "
+        "data protection",
+        "UAE power of attorney — notarised and, where executed abroad, attested",
     ],
     Journey.PRODUCT_SALE: [
-        "RBI Charter of Customer Rights — Right to Suitability",
-        "RBI Fair Practices Code — no mis-selling or bundled products",
+        "CBUAE Consumer Protection Standards — suitability and no mis-selling",
+        "CBUAE Circular 29/2011 — no bundling of a product the customer did not ask for",
     ],
     Journey.COMPLAINT: [
-        "RBI Integrated Ombudsman Scheme 2021 — internal redress within 30 days",
-        "RBI Charter of Customer Rights — Right to Grievance Redress",
+        "CBUAE Consumer Protection Standards — acknowledge and resolve within the "
+        "published internal timescale",
+        "Sanadak — the independent Ombudsman Unit for banking and insurance, free "
+        "to the consumer, once the internal route is exhausted",
     ],
     Journey.GENERAL_SERVICING: [
-        "RBI Master Circular on Customer Service",
-        "RBI Charter of Customer Rights — Right to Fair Treatment",
+        "CBUAE Consumer Protection Standards — disclosure and transparency",
+        "CBUAE Consumer Protection Regulation 8/2020 — fair treatment of consumers",
     ],
 }
 
@@ -234,14 +258,17 @@ PROHIBITED_ACTIONS: dict[Journey, list[str]] = {
         "pressing for a payment that would leave essential bills unpaid",
     ],
     Journey.ARREARS_COLLECTIONS: [
-        "threatening legal action or recovery agents while a relief review is open",
+        "threatening a police case, a travel ban, or a security cheque being "
+        "presented, while a relief review is open",
         "pressing for a payment that would leave essential bills unpaid",
-        "calling outside 08:00–19:00, or contacting the customer's relatives or "
-        "employer about the debt",
+        "calling outside 09:00–20:00, or contacting the customer's employer, "
+        "sponsor, family or neighbours about the debt",
+        "telling the customer their visa or residency is at risk",
     ],
     Journey.BEREAVEMENT_ESTATE: [
         "requiring the customer to repeat the bereavement to another team",
         "applying charges or interest to the account while the estate is settled",
+        "stating who inherits, or advising on a succession claim",
     ],
     Journey.FRAUD_SCAM: [
         "asking the customer to move money to a 'safe account'",
@@ -301,17 +328,19 @@ class FinancialContext(BaseModel):
 # "behind on my payments" is an arrears disclosure.
 # --------------------------------------------------------------------------- #
 _PRODUCT_PATTERNS: list[tuple[Product, list[str]]] = [
-    (Product.MORTGAGE, ["home loan", "housing loan", "mortgage", "griha"]),
+    (Product.MORTGAGE, ["home loan", "housing loan", "mortgage", "property loan"]),
     (Product.CREDIT_CARD, ["credit card", "my card", "card balance", "minimum payment"]),
-    (Product.PERSONAL_LOAN, ["personal loan", "the loan", "loan payment", "loan agreement"]),
+    (Product.PERSONAL_LOAN, ["personal loan", "the loan", "loan payment", "loan agreement",
+                             "salary transfer loan", "salary loan"]),
     (Product.OVERDRAFT, ["overdraft", "overdrawn"]),
-    (Product.CAR_FINANCE, ["vehicle loan", "car loan", "two wheeler loan", "bike loan"]),
-    (Product.SAVINGS, ["savings account", "fixed deposit", "recurring deposit",
-                       "my savings", "fd"]),
-    (Product.PENSION, ["pension", "annuity", "drawdown"]),
-    (Product.INSURANCE, ["insurance", "policy claim", "life cover"]),
-    (Product.CURRENT_ACCOUNT, ["current account", "savings account", "auto debit",
-                               "standing instruction", "my account", "balance", "upi"]),
+    (Product.CAR_FINANCE, ["vehicle loan", "car loan", "auto loan", "car finance"]),
+    (Product.SAVINGS, ["savings account", "fixed deposit", "term deposit",
+                       "my savings", "wakala deposit"]),
+    (Product.PENSION, ["pension", "annuity", "end of service", "gratuity"]),
+    (Product.INSURANCE, ["insurance", "policy claim", "life cover", "takaful"]),
+    (Product.CURRENT_ACCOUNT, ["current account", "savings account", "direct debit",
+                               "standing instruction", "my account", "balance",
+                               "salary account"]),
 ]
 
 _JOURNEY_PATTERNS: list[tuple[Journey, list[str]]] = [
@@ -324,18 +353,22 @@ _JOURNEY_PATTERNS: list[tuple[Journey, list[str]]] = [
     (Journey.THIRD_PARTY_ACCESS, ["power of attorney", "attorney", "carer", "trusted person",
                                   "third party", "my daughter helps", "my son helps",
                                   "helps me with"]),
-    (Journey.FORBEARANCE_REQUEST, ["moratorium", "payment holiday", "pause my emi",
-                                   "reduce my emi", "restructure", "payment plan",
+    (Journey.FORBEARANCE_REQUEST, ["moratorium", "payment holiday", "pause my instalment",
+                                   "reduce my instalment", "restructure", "payment plan",
                                    "arrangement to pay", "waive the interest",
-                                   "reschedule", "more time to pay"]),
+                                   "reschedule", "more time to pay", "settlement plan"]),
     (Journey.ARREARS_COLLECTIONS, ["behind on", "behind with", "missed a payment",
-                                   "missed payments", "missed emi", "in arrears", "arrears",
-                                   "overdue", "default notice", "recovery agent",
-                                   "collection agent", "chasing me", "keep calling me"]),
+                                   "missed payments", "missed instalment", "in arrears",
+                                   "arrears", "overdue", "default notice", "recovery agent",
+                                   "collection agent", "chasing me", "keep calling me",
+                                   "called my employer", "called my sponsor",
+                                   "security cheque", "police case", "travel ban"]),
     (Journey.AFFORDABILITY_SHOCK, ["lost my job", "made redundant", "redundant", "can't afford",
                                    "cannot afford", "hours were cut", "no income",
                                    "money for food", "struggling to pay", "money is tight",
-                                   "money's tight"]),
+                                   "money's tight", "salary is delayed", "salary not paid",
+                                   "visa cancelled", "visa is cancelled",
+                                   "contract was terminated", "sent home"]),
     (Journey.COMPLAINT, ["complain", "complaint", "ombudsman", "unacceptable"]),
     (Journey.PRODUCT_SALE, ["apply for", "new card", "increase my limit", "borrow more",
                             "top-up loan", "top up loan", "switch to", "pre-approved"]),
@@ -346,31 +379,36 @@ _JOURNEY_PATTERNS: list[tuple[Journey, list[str]]] = [
 # describe arrears and none of them contain the phrase "in arrears".
 _STRESS_PATTERNS: list[tuple[StressIndicator, str]] = [
     (StressIndicator.MISSED_PAYMENT,
-     r"missed\s+(?:\w+\s+){0,2}(?:payments?|emis?)|didn'?t\s+pay"
-     r"|late\s+(?:with\s+)?(?:payments?|emis?)"
-     r"|(?:payment|emi|cheque)\s+(?:didn'?t|bounced|failed|returned)"),
+     r"missed\s+(?:\w+\s+){0,2}(?:payments?|instal?ments?)|didn'?t\s+pay"
+     r"|late\s+(?:with\s+)?(?:payments?|instal?ments?)"
+     r"|(?:payment|instal?ment|cheque)\s+(?:didn'?t|bounced|failed|returned)"),
     (StressIndicator.ARREARS,
-     r"\barrears\b|\boverdue\b|behind\s+(?:on|with)\b|(?:payments?|emis?)\s+behind"
-     r"|default\s+notice|fallen\s+behind|\bnpa\b|recovery\s+agent"),
+     r"\barrears\b|\boverdue\b|behind\s+(?:on|with)\b|(?:payments?|instal?ments?)\s+behind"
+     r"|default\s+notice|fallen\s+behind|recovery\s+agent|security\s+cheque"
+     r"|police\s+case|travel\s+ban"),
     (StressIndicator.ESSENTIAL_SPEND_CONFLICT,
      r"money\s+for\s+food|can'?t\s+(?:feed|afford\s+to\s+eat)"
-     r"|choos(?:e|ing)\s+between|keep\s+the\s+lights\s+on"
-     r"|(?:rent|emi|electric\w*|gas|school\s+fees|medical)\s+or\s+(?:the\s+)?\w+"
-     r"|no\s+money\s+for|ration"),
+     r"|choos(?:e|ing)\s+between|keep\s+the\s+(?:lights|a\s?c)\s+on"
+     r"|(?:rent|instal?ment|electric\w*|\bdewa\b|\bsewa\b|\baddc\b|school\s+fees"
+     r"|medical)\s+or\s+(?:the\s+)?\w+"
+     r"|no\s+money\s+for"),
     (StressIndicator.NO_SAVINGS_BUFFER,
      r"no\s+savings|nothing\s+(?:put\s+by|saved|left)|no\s+buffer|nothing\s+to\s+fall\s+back"),
     (StressIndicator.OVER_INDEBTEDNESS,
      r"too\s+much\s+debt|\bdebts\b|multiple\s+(?:loans|cards)|maxed\s+(?:out|the)"
      r"|robbing\s+peter"),
     (StressIndicator.BENEFIT_RELIANCE,
-     r"\bpension\b|widow\s+pension|ration\s+card|\bmnrega\b|government\s+scheme"
-     r"|disability\s+(?:pension|allowance)|\bsubsidy\b"),
+     r"\bpension\b|widow\s+pension|social\s+support|government\s+scheme"
+     r"|disability\s+(?:pension|allowance)|\bsubsidy\b|end\s+of\s+service"
+     r"|\bgratuity\b|\bzakat\b"),
     (StressIndicator.INCOME_SHOCK,
      r"lost\s+my\s+job|made\s+redundant|\bredundant\b|hours\s+(?:were\s+)?cut"
-     r"|sick\s+pay|no\s+income|income\s+(?:has\s+)?(?:dropped|fallen)|laid\s+off"),
+     r"|sick\s+pay|no\s+income|income\s+(?:has\s+)?(?:dropped|fallen)|laid\s+off"
+     r"|salary\s+(?:is\s+)?(?:delayed|late|not\s+paid|stopped)|visa\s+(?:is\s+)?cancell?ed"
+     r"|contract\s+(?:was\s+)?terminated|company\s+closed"),
     (StressIndicator.HIGH_COST_CREDIT,
-     r"money\s?lender|sahukar|chit\s+fund|gold\s+loan|instant\s+loan\s+app"
-     r"|buy\s+now\s+pay\s+later|loan\s+app"),
+     r"money\s?lender|committee\s+money|\bchitty\b|gold\s+loan|instant\s+loan\s+app"
+     r"|buy\s+now\s+pay\s+later|loan\s+app|borrowed\s+from\s+a\s+friend"),
     (StressIndicator.SCAM_EXPOSURE,
      r"scam\w*|fraud\w*|safe\s+account|someone\s+took|phishing|didn'?t\s+authorise"),
     (StressIndicator.GAMBLING_SPEND,
@@ -382,16 +420,16 @@ _STRESS_RE = [(ind, re.compile(pattern, re.IGNORECASE))
 _COUNT = r"(one|two|three|four|five|six|seven|eight|nine|ten|\d{1,2})"
 # Both orders people actually use: "three months behind" and "missed two payments".
 _ARREARS_MONTHS = [
-    re.compile(rf"\b{_COUNT}\s+(?:month|months|payment|payments)\s+"
+    re.compile(rf"\b{_COUNT}\s+(?:month|months|payment|payments|instalment|instalments)\s+"
                r"(?:behind|in\s+arrears|late|overdue|missed)\b", re.IGNORECASE),
-    re.compile(rf"\bmissed\s+{_COUNT}\s+(?:month|months|payment|payments)\b",
-               re.IGNORECASE),
+    re.compile(rf"\bmissed\s+{_COUNT}\s+(?:month|months|payment|payments"
+               r"|instalment|instalments)\b", re.IGNORECASE),
 ]
 _WORD_NUMBERS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                  "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
 
-_MONEY = re.compile(r"(?:₹|rs\.?|inr)\s?\d[\d,]*(?:\.\d{1,2})?"
-                    r"|\d[\d,]*(?:\.\d+)?\s*(?:lakh|lakhs|crore|crores|thousand)",
+_MONEY = re.compile(r"(?:aed|dhs?\.?|د\.إ)\s?\d[\d,]*(?:\.\d{1,2})?"
+                    r"|\d[\d,]*(?:\.\d{1,2})?\s*(?:aed|dirhams?|thousand|million)",
                     re.IGNORECASE)
 
 

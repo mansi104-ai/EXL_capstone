@@ -66,11 +66,12 @@ _ANNOUNCERS: list[tuple[str, re.Pattern]] = [
     ("card", re.compile(
         r"\b(?:card\s*(?:number|no\.?)|long\s*number|the\s+card\s+ends?)\b[^.?!]{0,20}$",
         re.IGNORECASE)),
-    ("ni_number", re.compile(
-        r"\b(?:national\s+insurance|ni\s+number)\b[^.?!]{0,20}$", re.IGNORECASE)),
+    ("emirates_id", re.compile(
+        r"\b(?:emirates\s+i\.?d\.?|\beid\b|identity\s+card|resident\s+id)\b"
+        r"[^.?!]{0,20}$", re.IGNORECASE)),
+    ("iban", re.compile(r"\b(?:iban|i\.b\.a\.n\.?)\b[^.?!]{0,20}$", re.IGNORECASE)),
     ("date_of_birth", re.compile(
         r"\b(?:date\s+of\s+birth|d\.?o\.?b\.?|born\s+on)\b[^.?!]{0,20}$", re.IGNORECASE)),
-    ("postcode", re.compile(r"\b(?:post\s*code|postcode)\b[^.?!]{0,20}$", re.IGNORECASE)),
     ("security", re.compile(
         r"\b(?:pin|passcode|password|security\s+(?:code|number|answer)|cvv|"
         r"three\s+digits?\s+on\s+the\s+back)\b[^.?!]{0,20}$", re.IGNORECASE)),
@@ -181,8 +182,8 @@ def redact(text: str, prompted: bool = False) -> LiveRedaction:
     # An announcement anywhere in the fragment (not only at the tail) lowers the
     # bar for what counts as an identifier in the rest of it.
     has_context = prompted or announced is not None or bool(
-        re.search(r"\b(sort\s*code|account\s*number|card\s*number|national\s+insurance|"
-                  r"date\s+of\s+birth|postcode|reference)\b", text, re.IGNORECASE)
+        re.search(r"\b(sort\s*code|account\s*number|card\s*number|emirates\s+id|"
+                  r"\beid\b|iban|date\s+of\s+birth|reference)\b", text, re.IGNORECASE)
     )
     floor = _PROMPTED_DIGIT_FLOOR if has_context else _UNPROMPTED_DIGIT_FLOOR
 

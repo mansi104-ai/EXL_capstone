@@ -32,6 +32,7 @@ import requests
 
 from config.settings import Settings, get_settings
 
+from ..utils import language as lang
 from ..utils.logging import get_logger
 
 log = get_logger("services.speech")
@@ -40,11 +41,28 @@ log = get_logger("services.speech")
 _TARGET_RATE = 16000
 _REST_TIMEOUT = 30
 
-# Default synthesis voice. A UK bank's handler should sound like one, and the
-# neural voices carry the warmth this context needs far better than the
-# standard ones.
-DEFAULT_VOICE = "en-GB-SoniaNeural"
-DEFAULT_LANGUAGE = "en-GB"
+# Default synthesis voice and recogniser locale, used when nothing is known
+# about the call yet. Everything after the first utterance goes through
+# `utils.language`, which owns the locale and voice for each of the languages
+# this bank's book actually speaks — see `voice_for` and `locale_for` below.
+#
+# The default is English because an outbound call whose customer record carries
+# no language has to open in something, and English is the market's lingua
+# franca. It is a starting point, not an assumption: the moment the customer
+# speaks, `utils.language.resolve_call_language` decides what the rest of the
+# call is held in.
+DEFAULT_VOICE = lang.voice_for("en")
+DEFAULT_LANGUAGE = lang.stt_locale("en")
+
+
+def voice_for(language: str) -> str:
+    """The neural voice that answers a call held in `language`."""
+    return lang.voice_for(language)
+
+
+def locale_for(language: str) -> str:
+    """The recogniser locale for a call held in `language`."""
+    return lang.stt_locale(language)
 
 # Speaking-style hints per emotional register. Not every voice supports every
 # style, so synthesis retries without the style block if Azure rejects it.
@@ -159,6 +177,11 @@ class SpeechService:
             "credentials": credentials,
             "region": self.settings.azure_speech_region or "",
             "voice": DEFAULT_VOICE,
+            # What the browser recogniser may be told to listen for. Azure caps
+            # at-start language identification at four candidates, so this is a
+            # bounded list rather than "everything we support" — see
+            # `utils.language.autodetect_locales`.
+            "languages": sorted(lang.LANGUAGES),
             "reason": reason,
         }
 
@@ -167,14 +190,20 @@ class SpeechService:
         return self.status()["available"]
 
     # --- browser capture (deployment-safe) -------------------------------
-    def transcribe_wav(self, data: bytes, language: str = "en-GB") -> Optional[str]:
-        """Transcribe WAV bytes recorded in the browser. Returns None on silence."""
+    def transcribe_wav(self, data: bytes, language: str = "en") -> Optional[str]:
+        """Transcribe WAV bytes recorded in the browser. Returns None on silence.
+
+        `language` is a language tag ("ur"), not a locale — the mapping to
+        "ur-PK" belongs in one place, and this is not it. A full locale is
+        accepted too and normalises to the same thing.
+        """
         if not self.available:
             raise RuntimeError(self.status()["reason"])
 
+        locale = locale_for(language)
         audio = _normalise_wav(data)
         url = (f"https://{self.settings.azure_speech_region}.stt.speech.microsoft.com"
-               f"/speech/recognition/conversation/cognitiveservices/v1?language={language}")
+               f"/speech/recognition/conversation/cognitiveservices/v1?language={locale}")
         resp = requests.post(
             url,
             headers={
@@ -232,8 +261,8 @@ class SpeechService:
         return self._token, self.settings.azure_speech_region
 
     # --- speech out ------------------------------------------------------
-    def synthesize(self, text: str, voice: str = DEFAULT_VOICE,
-                   emotion: str = "", language: str = DEFAULT_LANGUAGE) -> Optional[bytes]:
+    def synthesize(self, text: str, voice: str = "", emotion: str = "",
+                   language: str = "en") -> Optional[bytes]:
         """Render the handler's reply as speech. Returns MP3 bytes.
 
         `emotion` is the customer's state, not the handler's: a caller who is
@@ -241,15 +270,24 @@ class SpeechService:
         angry gets a deliberately calm one. Where the voice does not support the
         requested style Azure rejects the SSML, so the call retries plain — a
         reply that is spoken flatly is far better than one not spoken at all.
+
+        `language` picks the voice unless one is passed explicitly. Speaking
+        approved Urdu wording through an English voice produces something no
+        Urdu speaker can follow, so the two are chosen together rather than
+        separately: the language of the words decides the mouth that says them.
+        Expressive styles are largely an en-* feature, so a non-English voice
+        simply skips the style attempt rather than paying for a rejected request.
         """
         if not text or not text.strip():
             return None
         if not self.available:
             raise RuntimeError(self.status()["reason"])
 
-        style = STYLE_FOR_EMOTION.get(emotion, "")
+        locale = locale_for(language)
+        voice = voice or voice_for(language)
+        style = STYLE_FOR_EMOTION.get(emotion, "") if locale.startswith("en") else ""
         for attempt_style in ([style, ""] if style else [""]):
-            ssml = self._ssml(text, voice, language, attempt_style)
+            ssml = self._ssml(text, voice, locale, attempt_style)
             audio = self._post_ssml(ssml)
             if audio is not None:
                 return audio
@@ -258,6 +296,9 @@ class SpeechService:
     @staticmethod
     def _ssml(text: str, voice: str, language: str, style: str) -> str:
         body = html.escape(text.strip())
+        # Right-to-left text needs no special handling in SSML — the marks that
+        # matter are already in the string, and stripping or re-ordering them
+        # here would corrupt approved wording. It is passed through untouched.
         # A slightly slower delivery is easier to follow for anyone in distress
         # or with a capability-related need — which is most of this caseload.
         inner = f'<prosody rate="-6%">{body}</prosody>'

@@ -45,7 +45,7 @@ from ..finance.accounts import (
     accounts_for,
     context_summary,
     get_customer,
-    inr,
+    aed,
 )
 from ..finance.taxonomy import Product
 from ..services.claude_client import EFFORT_ANALYSIS, get_claude
@@ -179,32 +179,32 @@ def _spoken_list(items: list[str]) -> str:
 def _facts_for(account: Account, field: str) -> list[str]:
     """Masked, speakable facts about one account.
 
-    Figures go through `inr`, so a customer hears ₹2,84,000 rather than a
-    Western-grouped number in the wrong currency, and instalments are EMIs.
+    Figures go through `aed`, so a customer hears AED 8,650 rather than a bare
+    number in no currency at all, and instalments are instalments.
     """
     plural = "s" if account.arrears_months != 1 else ""
     facts = [f"{account.label}, {account.masked_number}"]
     if field in ("balance", "other", "none", "statement"):
         if account.owed:
-            facts.append(f"{inr(account.owed)} outstanding")
+            facts.append(f"{aed(account.owed)} outstanding")
         else:
-            facts.append(f"{inr(account.balance)} available")
+            facts.append(f"{aed(account.balance)} available")
     if field in ("arrears", "balance", "other") and account.arrears_months:
-        facts.append(f"{account.arrears_months} EMI{plural} overdue, "
-                     f"{inr(account.arrears_amount)} to bring it up to date")
+        facts.append(f"{account.arrears_months} instalment{plural} overdue, "
+                     f"{aed(account.arrears_amount)} to bring it up to date")
     if field in ("payment", "arrears", "other", "none") and account.monthly_payment:
-        facts.append(f"an EMI of {inr(account.monthly_payment)} due on "
+        facts.append(f"an instalment of {aed(account.monthly_payment)} due on "
                      f"{account.next_payment_date}")
     if field == "limit":
         if account.credit_limit:
             available = max(0.0, account.credit_limit - account.owed)
-            facts.append(f"a limit of {inr(account.credit_limit)}")
-            facts.append(f"{inr(available)} of that still available")
+            facts.append(f"a limit of {aed(account.credit_limit)}")
+            facts.append(f"{aed(available)} of that still available")
         else:
             facts.append("no credit limit — it isn't a card or an overdraft")
     if field == "transactions":
         for txn in account.transactions[:3]:
-            facts.append(f"{txn.date}: {txn.description} {inr(abs(txn.amount))}")
+            facts.append(f"{txn.date}: {txn.description} {aed(abs(txn.amount))}")
     return facts
 
 
@@ -217,8 +217,8 @@ def _relevant_account(accounts: list[Account], text: str,
     matched on `product.value.replace("_", " ")` — the literal string "credit
     card" — and when that missed it fell through to whichever account was in the
     most trouble. So "can you check my credit card limit", asked by a customer
-    with no card, was answered with her joint home loan: three EMIs overdue,
-    ₹74,550 to bring it up to date. Fluent, confident, and about an account she
+    with no card, was answered with her joint home loan: three instalments overdue,
+    AED 25,950 to bring it up to date. Fluent, confident, and about an account she
     had not mentioned.
 
     Answering the wrong account is a disclosure, not a near-miss. If the product
@@ -261,7 +261,7 @@ def _resolve(customer_id: str, text: str, field: str, subject: str,
     # data is in play, it is refused.
     # Both signals — the model's reading and the phrase cues — only refuse when a
     # request is actually being made. "My husband passed away and I've missed two
-    # EMIs" mentions a third party and asks for nothing; refusing it told a widow
+    # instalments" mentions a third party and asks for nothing; refusing it told a widow
     # she could not discuss her own home loan, which is worse than useless.
     asking = bool(_REQUEST_SHAPE.search(text) and _DATA_NOUN.search(text))
     cues = bool(_THIRD_PARTY_CUES.search(text)) and not _SELF_CUES.search(text)

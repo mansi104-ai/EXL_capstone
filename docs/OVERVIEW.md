@@ -1,24 +1,32 @@
 # GuardianCX — How it was built
 
-> A multi-agent advisory system for **Indian retail banking and consumer credit**. It
-> detects vulnerable customers *during* the call, grounds its guidance in the
-> firm's policy and the rules that apply to that journey, keeps a human in the
-> loop, and evidences that the customer was treated fairly.
+> A multi-agent system for **governed collections in UAE retail banking**. It
+> places scheduled, routine calls under an approved treatment strategy, in the
+> language the customer actually speaks; detects vulnerable customers *during*
+> the call; grounds its guidance in the firm's policy and the rules that apply to
+> that journey; keeps a human in the loop; and evidences that the customer was
+> treated fairly.
 
 ## The problem, narrowed
 
 A general-purpose classifier can tell you that a customer sounds distressed. It
-cannot tell you that a customer three payments behind on a regulated credit
-agreement, choosing between the mortgage and the electricity bill, has engaged
-the Fair Practices Code's forbearance duty — and that offering them a consolidation loan would
-breach the RBI Charter of Customer Rights.
+cannot tell you that a customer three instalments behind on a salary-transfer
+loan, whose salary stopped because their contract ended, has engaged the CBUAE
+Consumer Protection Standards' forbearance duty — that a call to their employer
+about it threatens their residency rather than merely embarrassing them, and that
+offering them a top-up loan would breach the suitability rule.
 
 That gap is the product. GuardianCX reasons on **two axes at once**:
 
 | Axis | What it measures | Source |
 |---|---|---|
-| **Vulnerability** | health · life events · resilience · capability | the bank's vulnerability framework |
-| **Financial detriment** | arrears · essential-spend conflict · income shock · scam exposure · gambling harm | the firm's own operational data |
+| **Vulnerability** | health · life events · resilience · capability | the bank's own adopted framework |
+| **Financial detriment** | arrears · essential-spend conflict · income shock · scam exposure | the firm's own operational data |
+
+A third axis governs whether the call happens at all: the **approved treatment
+strategy** decides who may be contacted, when, how often, and in what words. It
+is enforced as data and gates rather than as instructions in a prompt, because a
+prompt is a request a model usually honours and a gate is one it cannot get past.
 
 They are independent, and the intersection is where a firm must act. A composed,
 financially literate customer can be in serious arrears. A bereaved customer may
@@ -35,7 +43,7 @@ flowchart TD
       direction TB
       A1["1 · Conversation<br/><i>masking · input guardrails</i>"] --> A2["2 · Financial Context<br/><i>product · journey · stress indicators</i>"]
       A2 --> A3["3 · Sentiment<br/><i>words + voice → distress</i>"]
-      A3 --> A4["4 · Vulnerability Detection<br/><i>4 RBI drivers</i>"]
+      A3 --> A4["4 · Vulnerability Detection<br/><i>4 drivers</i>"]
       A4 -->|drivers + journey| A5["5 · Policy Retrieval — RAG<br/><i>driver-filtered, journey-re-ranked</i>"]
       A5 -->|policy clauses| A6["6 · Guidance<br/><i>grounded only in retrieved policy</i>"]
       A6 --> A7["7 · Compliance<br/><i>confidence · grounding · prohibited actions</i>"]
@@ -62,7 +70,7 @@ agents → speech out, per turn.
 | **Continuous capture** | Azure Speech streams interim words as they are spoken | Push-to-talk cannot show the customer being interrupted, or PII being caught mid-sentence |
 | **EOU model** | decides the turn is over from *meaning*, not silence | Silence endpointing talks over a bereaved customer pausing after "my husband passed away and…". Thresholds adapt to how finished the sentence looks, and extend further when the caller is distressed |
 | **Prosody** | six acoustic measurements → agitation, tremor, hesitancy | The transcript flattens the call. A shaking voice weighs more than a loud one — an angry customer is not a vulnerable one |
-| **Live PII** | spoken *and* written forms redacted on the way in | "my IFSC code is oh nine, oh one, double two" matches no written pattern. The guard also fires on the *announcement*, before the value is spoken |
+| **Live PII** | spoken *and* written forms redacted on the way in | "my Emirates ID is seven eight four, one nine eight eight…" matches no written pattern. The guard also fires on the *announcement*, before the value is spoken |
 | **Streaming** | the reply renders as the model writes it | The synthesiser can start on the first sentence instead of the last |
 | **Spoken reply** | Azure neural voice, style chosen by the customer's state | Recognition is muted during playback, or the agent transcribes and answers itself |
 
@@ -97,15 +105,38 @@ No new third-party dependency was added for any of the live-call work.
 
 | Stage | Guardrail | Severity | Purpose |
 |-------|-----------|----------|---------|
-| Input | PII masking | warn | Redact emails, cards, IFSC codes, PAN and Aadhaar, postcodes, dates of birth, IBANs — spoken forms included |
+| Input | PII masking | warn | Redact emails, cards, Emirates ID, UAE IBANs and mobiles, account numbers, dates of birth — spoken forms included |
 | Input | Prompt injection | block | Detect instruction-override / prompt-extraction |
 | Input | Toxicity | warn | Flag abusive language for tone-aware handling |
 | Output | Confidence threshold | warn | Route low-confidence guidance to review |
 | Output | Hallucination grounding | block | Reject citations not present in retrieved policy |
 | Output | **Prohibited action** | block | Block advice that causes harm however well grounded — credit to a customer disclosing gambling harm, a "safe account" instruction on a scam call, a demand for a payment that would leave essentials unpaid |
 | Output | Human approval | block | Mandatory sign-off for high-risk recommendations |
+| Reply | **Credential request** | block | Blocks a reply asking the customer for a PIN, password, OTP or CVV. The approved challenge flow confirms identity from what the bank already knows |
+| Reply | **Approved wording** | block | Holds an outbound call to the wording its strategy authorised, in the call's language. Accepts composition of approved fragments; rejects invention |
 | Reply | **Data disclosure** | block | Blocks any identifier from the account book appearing in what the customer is told — a third party's account, or the caller's own number in full |
 | Reply | **Customer clarity** | warn | Flags a draft the customer cannot act on — policy voice, jargon, no concrete offer, sentences too long to follow when spoken |
+
+The reply set is ordered by what cannot be undone. A customer may answer a
+request for a passcode before the sentence has finished, and the answer is gone;
+a leaked identifier cannot be recalled either, but the harm needs the wrong
+person to be listening; a clumsy sentence is recoverable. Hence block, block,
+block, warn — in that order.
+
+Two of these deserve their reasoning stated. **Credential request** is a block
+not only because a disclosed secret cannot be retrieved, but because the single
+most effective protection a bank has against impersonation fraud is that a real
+bank never asks. An agent that asks — even once, even harmlessly — spends that
+protection. It is careful to *pass* the sentences that warn about credentials
+("I will never ask you for your PIN", "don't share that code with anyone"),
+because those are exactly the lines a fraud call should contain.
+
+**Approved wording** exists because "approved wording only, without deviation" is
+either enforced on the sentence or it is decorative. A model told to use only the
+wording it is given will do so almost always, and the exception is not random: it
+drifts when the customer pushes, when the situation is unusual, and when the
+conversation is emotionally difficult — which is to say, on exactly the calls a
+reviewer will read.
 
 The prohibited-action check is deterministic and journey-scoped. It excludes
 verbatim policy quotations and negated mentions, so a clause that *forbids* an
@@ -185,9 +216,9 @@ aloud it is unusable:
 > *"Express condolences and reassure the customer they will not need to repeat
 > the bereavement disclosure to another team."*
 
-Under the the RBI Charter of Customer Rights (Right to Transparency) a firm must
-communicate in a way the customer can act on, and must tailor that where the
-customer is vulnerable. So the reply is composed rather than quoted:
+Under the CBUAE Consumer Protection Standards a firm must communicate in a way
+the customer can act on, and must tailor that where the customer is vulnerable.
+So the reply is composed rather than quoted:
 
 * **Approved wording first.** Each policy clause carries `Offer:` lines — the
   sentences a handler may actually say, authored beside the clause where a
@@ -229,13 +260,15 @@ label, not the retrieval.
 | | |
 |---|---|
 | LangGraph agents | **10** |
-| Guardrails | **9** |
-| Console pages | **11** |
-| Policy clauses | **35** |
-| RBI drivers · banking journeys · stress indicators | **4 · 10 · 10** |
-| RAG hit-rate@3 | **100%** |
-| Retrieval MRR | **0.95** |
-| Tests passing | **162** |
+| Guardrails | **11** |
+| Console pages | **12** |
+| Policy clauses | **37** |
+| Languages spoken | **6** |
+| Approved treatment strategies | **4** |
+| Drivers · banking journeys · stress indicators | **4 · 10 · 10** |
+| RAG hit-rate@3 (36 labelled queries) | **100%** |
+| Retrieval MRR | **0.926** |
+| Tests passing | **278** |
 
 ## How it was built
 
@@ -250,12 +283,18 @@ label, not the retrieval.
    secrets so the same code runs locally and in the cloud.
 5. **Retrieval fix & evaluation** — diagnosed poor retrieval (a hashing
    fallback), switched to semantic embeddings, added the evaluation harness.
-6. **The finance niche & the real call** — narrowed to Indian retail banking and
+6. **The finance niche & the real call** — narrowed to retail banking and
    consumer credit with a product/journey/detriment taxonomy, a Financial Context
    agent and journey-aware retrieval; and turned the monitor into a genuine
    call — continuous speech in, semantic endpointing, prosody-informed sentiment,
    live PII redaction, a streamed reply spoken back in a neural voice, and a
    conversation library that keeps what was said.
+7. **Governed collections, UAE** — re-grounded the corpus and taxonomy on the
+   CBUAE instruments; authored the approved wording in Arabic and Urdu beside the
+   clauses it belongs to; gave the call a language, a locale and a voice; and
+   built the outbound half — approved treatment strategies, permitted calling
+   hours, a durable opt-out register heard in the language it was said in, and a
+   queue whose every refusal names the gate that refused it.
 
 ---
 

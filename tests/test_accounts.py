@@ -34,8 +34,8 @@ from guardiancx.guardrails.base import GuardrailContext
 from guardiancx.guardrails.disclosure import DisclosureGuardrail
 
 WIDOW = "CUST-4471"      # Meera Deshpande — joint home loan, husband's sole card
-CARDHOLDER = "CUST-6612"  # Arjun Malhotra — home loan and a credit card of his own
-DECEASED = "CUST-4472"   # Robert Hughes
+CARDHOLDER = "CUST-6612"  # Muhammad Aslam — salary-transfer loan and a card of his own
+DECEASED = "CUST-4472"   # Rajesh Deshpande
 
 
 # --------------------------------------------------------------------------- #
@@ -226,10 +226,10 @@ def test_a_reply_that_actually_declines_passes():
     assert result.passed
 
 
-def test_an_email_or_pan_read_back_is_blocked():
+def test_an_email_or_emirates_id_read_back_is_blocked():
     customer = get_customer(WIDOW)
     assert not _check(f"I'll send it to {customer.email}.").passed
-    assert not _check(f"Your PAN is {customer.pan}, correct?").passed
+    assert not _check(f"Your Emirates ID is {customer.emirates_id}, correct?").passed
 
 
 # --------------------------------------------------------------------------- #

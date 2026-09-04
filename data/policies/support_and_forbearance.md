@@ -1,4 +1,4 @@
-# Pan Indian Bank — Extended Vulnerable Customer Playbook (Support & Forbearance)
+# Gulf Union Bank — Extended Vulnerable Customer Playbook (Support & Forbearance)
 
 This playbook extends the core vulnerability policy with additional clauses for
 situations handlers encounter in practice. It follows the same four regulatory
@@ -11,23 +11,31 @@ drivers. Detection is advisory; every adaptation offered must be recorded.
 ### VP-H4 — Mental health crisis or distress
 Journeys: general_servicing, arrears_collections, complaint
 Offer: I can stay on the line with you for as long as you need
-Offer: I can give you the number for KIRAN, the government mental-health helpline — 1800-599-0019, free, day or night
+Offer: I can give you the number for the national mental health support line — 800 4673, free, day or night
 Offer: I can pause everything on the account so there's nothing to worry about today
+Offer[ar]: يمكنني البقاء معك على الخط للمدة التي تحتاجها
+Offer[ar]: يمكنني أن أعطيك رقم خط الدعم النفسي الوطني — 800 4673، مجاني، ليلاً ونهاراً
+Offer[ar]: يمكنني إيقاف كل شيء على الحساب حتى لا يكون هناك ما يقلقك اليوم
+Offer[ur]: میں جتنی دیر آپ کو ضرورت ہو، لائن پر آپ کے ساتھ رہ سکتی ہوں
+Offer[ur]: میں آپ کو قومی ذہنی صحت ہیلپ لائن کا نمبر دے سکتی ہوں — 800 4673، مفت، دن رات
+Offer[ur]: میں اکاؤنٹ پر سب کچھ روک سکتی ہوں تاکہ آج آپ کو کوئی فکر نہ ہو
 Where a customer expresses acute distress, hopelessness, or thoughts of self-harm,
 prioritise the person over the transaction. Stop any collections or sales process
-immediately, stay calm and listen, and offer to signpost urgent support (e.g. a
-crisis line or the KIRAN mental-health helpline on 1800-599-0019). Offer to pause account activity and arrange
-a callback from the specialist support team. Never leave the customer without a
-route to help.
+immediately, stay calm and listen, and offer to signpost urgent support (the
+national mental health support line on 800 4673, free and available day and
+night). Offer to pause account activity and arrange a callback from the
+specialist support team. Give the number in the language the call is being held
+in. Never leave the customer without a route to help.
 
 ### VP-H5 — Addiction and gambling-related harm
 Journeys: gambling_harm, product_sale
-Offer: I can put a block on gambling payments on your card today
-Offer: I can give you the number for the KIRAN helpline — 1800-599-0019, free and confidential
-When a customer indicates gambling harm or another addiction affecting their
-finances, offer practical tools without judgement: a gambling block on the card,
-spending limits, a cooling-off period on credit, and signposting to a counselling helpline
-(0808 8020 133) or equivalent support. Avoid offering additional credit.
+Offer: I can block that category of payment on your card today
+Offer: I can give you the number for the national support line — 800 4673, free and confidential
+When a customer indicates an addiction or compulsive spending affecting their
+finances, offer practical tools without judgement: a merchant-category block on
+the card, spending limits, a cooling-off period on credit, and signposting to the
+national mental health support line (800 4673) or equivalent support. Avoid
+offering additional credit.
 
 ---
 
@@ -51,7 +59,7 @@ Offer: I can look at your payments now your income has dropped
 Offer: I can move your payment date to line up with when you're paid
 When a customer is on maternity or paternity leave or adjusting to a new baby with reduced
 income, offer a proactive affordability review, flexible payment dates aligned to
-pay, and a temporary reduction or EMI moratorium where eligible. Avoid
+pay, and a temporary reduction or instalment moratorium where eligible. Avoid
 time-pressured decisions.
 
 ---
@@ -66,7 +74,8 @@ When a customer is prioritising between essential bills (rent/home loan, council
 tax, electricity, food) and credit repayments, treat our debt as non-priority relative
 to essentials. Offer a formal relief period, do not pressure for payment that would risk
 essentials, and provide a simple income-and-expenditure review. Signpost free debt
-advice (a Financial Literacy Centre).
+advice, and Sanadak, the independent Ombudsman Unit, where a dispute remains
+unresolved.
 
 ### VP-R5 — Income maximisation and benefits
 Journeys: affordability_shock, forbearance_request

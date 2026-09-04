@@ -64,11 +64,25 @@ class CallStage(str, Enum):
 
 # What a handler must confirm before discussing an account. Ordered by how
 # naturally they come up on a call.
-VERIFICATION_FIELDS = ["date_of_birth", "postcode"]
+#
+# Both of these are *knowledge* checks against data the bank already holds, and
+# neither is a credential. That distinction is the whole point of the list: a
+# bank may ask a customer to confirm something it knows about them, and must
+# never ask them to reveal something that grants access. There is no PIN here,
+# no password, no OTP and no CVV, and `guardrails.credential_request` enforces
+# that against the drafted line rather than trusting this list to stay clean.
+#
+# The last four digits of an Emirates ID replace the UK postcode this system
+# started with. There is no postcode in the UAE — addresses are unstructured,
+# and a "postcode" field in a UAE bank's verification flow is a tell that the
+# system was built for somewhere else. The Emirates ID is held by every legal
+# resident, the customer knows the number, and four digits is enough to
+# corroborate an identity without being enough to impersonate one.
+VERIFICATION_FIELDS = ["date_of_birth", "emirates_id_last4"]
 
 FIELD_PROMPTS = {
     "date_of_birth": "their date of birth",
-    "postcode": "the postcode on the account",
+    "emirates_id_last4": "the last four digits of their Emirates ID",
 }
 
 
@@ -248,16 +262,47 @@ def _as_dates(day: int, month: int, year: int) -> list[date]:
     return out
 
 
-_POSTCODE = re.compile(r"\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b", re.IGNORECASE)
+# Digits as people say them out loud. A caller reading four digits off a card
+# says "seven, four, double two" at least as often as "seven four two two", and a
+# check that only understands numerals fails honest customers on the phone.
+_SPOKEN_DIGITS = {
+    "zero": "0", "oh": "0", "o": "0", "nought": "0",
+    "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9",
+}
+_MULTIPLIERS = {"double": 2, "triple": 3, "treble": 3}
+
+
+def spoken_digits(text: str) -> str:
+    """Every digit in the utterance, in order, numerals and words alike.
+
+    "double two" becomes "22"; "seven four oh nine" becomes "7409". Order is
+    preserved because that is the only thing that makes the result comparable to
+    a stored number.
+    """
+    out: list[str] = []
+    pending = 1
+    for token in re.findall(r"[a-z]+|\d", (text or "").lower()):
+        if token.isdigit():
+            out.append(token * pending)
+            pending = 1
+        elif token in _MULTIPLIERS:
+            pending = _MULTIPLIERS[token]
+        elif token in _SPOKEN_DIGITS:
+            out.append(_SPOKEN_DIGITS[token] * pending)
+            pending = 1
+        else:
+            pending = 1
+    return "".join(out)
 
 
 def check_answer(customer: Customer, field: str, raw_text: str) -> bool:
     """Does the caller's answer match the record?
 
     Runs on the **raw** utterance, before redaction, because the redactor
-    correctly masks dates of birth and postcodes out of the transcript. Only the
-    result of this call is ever kept — the answer itself is not returned, logged
-    or stored anywhere.
+    correctly masks dates of birth and identity numbers out of the transcript.
+    Only the result of this call is ever kept — the answer itself is not
+    returned, logged or stored anywhere.
     """
     if not raw_text or not raw_text.strip():
         return False
@@ -269,12 +314,15 @@ def check_answer(customer: Customer, field: str, raw_text: str) -> bool:
             return False
         return expected in _parse_dates(raw_text)
 
-    if field == "postcode":
-        wanted = re.sub(r"\s+", "", customer.postcode).upper()
-        for candidate in _POSTCODE.findall(raw_text):
-            if re.sub(r"\s+", "", candidate).upper() == wanted:
-                return True
-        return False
+    if field == "emirates_id_last4":
+        wanted = customer.emirates_id_last4
+        if not wanted:
+            return False
+        said = spoken_digits(raw_text)
+        # A window scan rather than an endswith: a caller may read the whole
+        # number, or say "it ends four one two three, I think". Either contains
+        # the four digits in order, and neither ends with them.
+        return any(said[i:i + 4] == wanted for i in range(max(len(said) - 3, 0)))
 
     return False
 

@@ -91,16 +91,17 @@ def test_chat_turn_runs_the_pipeline_and_fills_the_rail():
 def test_disclosed_pii_never_reaches_the_transcript():
     app = _serving()
     app.chat_input[0].set_value(
-        "I can't pay this month — my PAN is AFZPD1274K and my email is meera@example.in"
+        "I can't pay this month — my Emirates ID is 784-1958-4417102-3 "
+        "and my email is meera.deshpande@example.ae"
     ).run()
     assert not app.exception, [e.value for e in app.exception]
 
     live = app.session_state["live"]
     stored = _customer_turns(live)[-1]["text"]
-    assert "AFZPD1274K" not in stored
-    assert "meera@example.in" not in stored
+    assert "784-1958-4417102-3" not in stored
+    assert "meera.deshpande@example.ae" not in stored
     assert "REDACTED" in stored
-    assert set(live["redactor"].total_redactions) >= {"pan", "email"}
+    assert set(live["redactor"].total_redactions) >= {"emirates_id", "email"}
 
 
 def test_the_date_of_birth_verifies_but_never_reaches_the_transcript():
@@ -118,7 +119,7 @@ def test_the_caller_hears_their_own_figures():
     app.chat_input[0].set_value("How much do I owe on the home loan?").run()
     assert not app.exception, [e.value for e in app.exception]
     reply = app.session_state["live"]["turns"][-1]["text"]
-    assert "₹" in reply, reply
+    assert "AED" in reply, reply
     assert "ending" in reply, "the account should be named by its last four digits"
 
 
