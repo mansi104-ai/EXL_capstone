@@ -2,7 +2,7 @@
 {"query": "My mother died recently and I'm handling her affairs", "driver": "life_events", "journey": "bereavement_estate", "expected": ["VP-L1", "VP-J5", "VP-J6"]}
 {"query": "I've told three different people about the death already, do I have to explain again", "driver": "life_events", "journey": "bereavement_estate", "expected": ["VP-J5", "VP-L1"]}
 {"query": "We are going through a divorce and need to split the joint account", "driver": "life_events", "journey": "third_party_access", "expected": ["VP-L2"]}
-{"query": "I lost my job on Friday and I'm worried about my EMIs", "driver": "life_events", "journey": "affordability_shock", "expected": ["VP-L3"]}
+{"query": "I lost my job on Friday and I'm worried about my instalments", "driver": "life_events", "journey": "affordability_shock", "expected": ["VP-L3"]}
 {"query": "I've had to stop working to care for my disabled son full time", "driver": "life_events", "journey": "third_party_access", "expected": ["VP-L4"]}
 {"query": "I'm on maternity leave with a new baby and my income has dropped", "driver": "life_events", "journey": "affordability_shock", "expected": ["VP-L6"]}
 {"query": "My partner controls all the money and I'm scared, please don't read details aloud", "driver": "life_events", "journey": "third_party_access", "expected": ["VP-L5"]}
@@ -13,15 +13,15 @@
 {"query": "I'm feeling hopeless and having thoughts of harming myself", "driver": "health", "journey": "general_servicing", "expected": ["VP-H4"]}
 {"query": "My gambling has got out of control and it's affecting my finances", "driver": "health", "journey": "gambling_harm", "expected": ["VP-H5", "VP-J9"]}
 {"query": "I've been betting again, can you stop me spending on the card", "driver": "health", "journey": "gambling_harm", "expected": ["VP-J9", "VP-H5"]}
-{"query": "I genuinely can't afford this EMI, I'm choosing between the electricity bill and food", "driver": "resilience", "journey": "affordability_shock", "expected": ["VP-R1", "VP-R4", "VP-J4"]}
+{"query": "I genuinely can't afford this instalment, I'm choosing between the DEWA bill and food", "driver": "resilience", "journey": "affordability_shock", "expected": ["VP-R1", "VP-R4", "VP-J4"]}
 {"query": "I owe money to five different lenders and keep borrowing to repay", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-R2"]}
 {"query": "I have no savings at all, one unexpected bill would finish me", "driver": "resilience", "journey": "affordability_shock", "expected": ["VP-R3"]}
 {"query": "I have to choose between paying rent, electricity and this card", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-R4", "VP-J4", "VP-R1"]}
 {"query": "My income dropped and I'm not sure I'm getting all the government support I'm entitled to", "driver": "resilience", "journey": "affordability_shock", "expected": ["VP-R5"]}
-{"query": "Can I have an EMI moratorium or reduce my EMIs for a few months", "driver": "resilience", "journey": "forbearance_request", "expected": ["VP-J1", "VP-R1"]}
+{"query": "Can I have a moratorium or reduce my instalments for a few months", "driver": "resilience", "journey": "forbearance_request", "expected": ["VP-J1", "VP-R1"]}
 {"query": "My credit counsellor mentioned a moratorium, what does that mean", "driver": "resilience", "journey": "forbearance_request", "expected": ["VP-J2"]}
 {"query": "You want me to fill in an income and expenses form but I can't do it all today", "driver": "resilience", "journey": "forbearance_request", "expected": ["VP-J3"]}
-{"query": "I'm two EMIs overdue on the loan and I've had a default notice", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-J1", "VP-R1", "VP-R2"]}
+{"query": "I'm two instalments overdue on the loan and I've had a default notice", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-J1", "VP-R1", "VP-R2"]}
 {"query": "I don't understand these financial terms, can you explain in plain English", "driver": "capability", "journey": "general_servicing", "expected": ["VP-C1"]}
 {"query": "English isn't my first language and I find it hard to follow", "driver": "capability", "journey": "general_servicing", "expected": ["VP-C2"]}
 {"query": "I have power of attorney and want to add my son as a nominee", "driver": "capability", "journey": "third_party_access", "expected": ["VP-C3", "VP-J8"]}
@@ -30,3 +30,7 @@
 {"query": "Someone told me to move my money to a safe account urgently", "driver": "capability", "journey": "fraud_scam", "expected": ["VP-C5", "VP-J7"]}
 {"query": "I authorised the payment myself but it turned out to be a scam, will I get it back", "driver": "capability", "journey": "fraud_scam", "expected": ["VP-J7", "VP-C5"]}
 {"query": "You keep trying to sell me a bigger overdraft when I've said I'm struggling", "driver": "capability", "journey": "product_sale", "expected": ["VP-J11"]}
+{"query": "My salary did not come this month because the company closed, so the instalment bounced", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-J15", "VP-J1"]}
+{"query": "My visa is cancelled and I am leaving the country, what happens to the loan", "driver": "resilience", "journey": "affordability_shock", "expected": ["VP-J15"]}
+{"query": "If I agree to this plan what will it show on my credit record", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-J16"]}
+{"query": "Your agent phoned my employer about the debt and I was humiliated", "driver": "resilience", "journey": "arrears_collections", "expected": ["VP-J14"]}

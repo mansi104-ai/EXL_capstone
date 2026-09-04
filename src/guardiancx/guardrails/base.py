@@ -34,6 +34,14 @@ class GuardrailContext:
     # Whether the Account Access agent refused this turn's data request, so the
     # disclosure guardrail can check the reply actually declines it.
     account_refused: bool = False
+    # The approved treatment strategy this call is running under, if any. Only
+    # outbound calls have one; an inbound call is not executing a strategy and
+    # the strategy-scoped guardrails stand down rather than inventing a rule.
+    strategy: Optional[str] = None
+    # The language the call is being held in. The wording guardrail compares the
+    # reply against approved wording *in that language* — comparing an Urdu reply
+    # against the English offers would fail every honest call.
+    language: str = "en"
 
 
 class Guardrail(abc.ABC):

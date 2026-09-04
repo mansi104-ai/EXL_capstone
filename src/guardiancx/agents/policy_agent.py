@@ -6,7 +6,7 @@ citations against — so what happens here bounds what the system is able to say
 
 Retrieval keys off two things, not one:
 
-* the **triggered vulnerability drivers**, which is the FCA axis, and
+* the **triggered vulnerability drivers**, which is the bank's own axis, and
 * the **financial journey**, which is the banking axis.
 
 Both matter, and either alone is wrong. Driver-only retrieval hands a bereaved
@@ -17,7 +17,7 @@ needs the journey handled differently from the last one.
 There is also a case the driver axis misses entirely: a customer three payments
 behind, matter-of-fact about it, showing no vulnerability driver at all. No
 driver triggers, so a driver-only system retrieves nothing and offers nothing —
-while CONC 7.3's forbearance duty is fully engaged. So a high-harm journey
+while the forbearance duty is fully engaged. So a high-harm journey
 retrieves on its own account, whether or not a driver fired.
 
 Measured distress is the third trigger, and the most important. A customer who

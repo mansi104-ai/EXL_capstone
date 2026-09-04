@@ -1,7 +1,7 @@
 """GuardianCX — Agentic Customer Experience for regulated financial services.
 
 Streamlit multipage entry point. Bootstraps the database + policy index, seeds
-synthetic conversations on first run, and wires the 11 pages via st.navigation.
+synthetic conversations on first run, and wires the 12 pages via st.navigation.
 
 Run:  streamlit run app.py   (from the guardiancx/ directory)
 """
@@ -51,6 +51,7 @@ OVERSIGHT = [
     st.Page(views.analytics, title="Analytics & Evaluation", icon=":material/analytics:"),
 ]
 OPERATIONS = [
+    st.Page(views.collections_queue, title="Collections Queue", icon=":material/call_made:"),
     st.Page(views.detection, title="Vulnerability Detection", icon=":material/psychology:"),
     st.Page(views.guidance_panel, title="AI Guidance Panel", icon=":material/lightbulb:"),
     st.Page(views.approval_queue, title="Human Approval Queue", icon=":material/how_to_reg:"),

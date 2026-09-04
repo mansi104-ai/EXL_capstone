@@ -37,7 +37,7 @@ from .prompts import CONSENT_SYSTEM
 # The opening line. Short, specific about what is recorded and why, and it asks a
 # real question rather than announcing a decision already taken.
 CONSENT_REQUEST = (
-    "Hello, you're through to Pan Indian Bank. Before we start — I record and make notes "
+    "Hello, you're through to Gulf Union Bank. Before we start — I record and make notes "
     "on our calls so I can get you the right support and you don't have to repeat "
     "yourself later. Is that alright with you?"
 )

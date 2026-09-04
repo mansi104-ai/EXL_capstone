@@ -106,14 +106,26 @@ def test_ordinary_numbers_in_conversation_survive():
     assert result.total == 0
 
 
-def test_written_indian_identifiers_are_masked():
-    text = ("my PAN is AFZPD1274K, Aadhaar 4321 8765 2109, "
-            "and I was born on 12/03/1958")
+def test_written_uae_identifiers_are_masked():
+    text = ("my Emirates ID is 784-1988-6612004-1, the IBAN is "
+            "AE07 0990 0000 6612 0043 159, and I was born on 30/01/1988")
     result = redact(text)
-    assert "AFZPD1274K" not in result.text
-    assert "4321 8765 2109" not in result.text
-    assert "12/03/1958" not in result.text
-    assert {"pan", "aadhaar", "date_of_birth"} <= set(result.redactions)
+    assert "784-1988-6612004-1" not in result.text
+    assert "0043 159" not in result.text
+    assert "30/01/1988" not in result.text
+    assert {"emirates_id", "iban", "date_of_birth"} <= set(result.redactions)
+
+
+def test_an_emirates_id_is_not_logged_as_a_card_number():
+    """Fifteen digits also match the card rule; the specific pattern must win.
+
+    The masking is the same either way. What differs is the evidence record,
+    and "the caller read out their identity document" is not the same finding
+    as "the caller read out a card number".
+    """
+    result = redact("it's 784-1977-7788025-4")
+    assert "emirates_id" in result.redactions
+    assert "card" not in result.redactions
 
 
 def test_announcement_is_flagged_before_the_value_is_spoken():
@@ -138,9 +150,9 @@ def test_value_split_across_two_fragments_is_still_caught():
 
 def test_redactor_accumulates_totals_across_a_call():
     redactor = LivePIIRedactor()
-    redactor.feed("my email is meera@example.in")
-    redactor.feed("and my PAN is AFZPD1274K")
-    assert set(redactor.total_redactions) == {"email", "pan"}
+    redactor.feed("my email is meera.deshpande@example.ae")
+    redactor.feed("and my Emirates ID is 784-1958-4417102-3")
+    assert set(redactor.total_redactions) == {"email", "emirates_id"}
 
 
 # --------------------------------------------------------------------------- #

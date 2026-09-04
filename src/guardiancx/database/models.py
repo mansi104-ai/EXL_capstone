@@ -10,6 +10,10 @@ Works against PostgreSQL (via GUARDIANCX_DATABASE_URL) or a local SQLite file
   seeded synthetically, so a call can be replayed, reviewed and compared long
   after the session that produced it has gone.
 * AuditEvent — a flat audit log of everything the system and its users did.
+* ContactPreference — the opt-out register, durable because "every opt-out
+  honoured" is a claim about behaviour over time.
+* CallTask — one scheduled outbound contact attempt, with its history, because
+  contact limits are limits on history rather than on intent.
 """
 from __future__ import annotations
 
@@ -104,6 +108,69 @@ class ConversationRecord(Base):
     journeys: Mapped[list] = mapped_column(JSON, default=list)
     peak_distress: Mapped[float] = mapped_column(Float, default=0.0)
     note: Mapped[str] = mapped_column(Text, default="")
+
+
+class ContactPreference(Base):
+    """The opt-out register — who has asked not to be contacted, and how.
+
+    This is a compliance artefact, not a cache. "Every opt-out honoured" is a
+    claim about behaviour over time, and it can only be evidenced from a durable
+    record that predates the call which honoured it. So it lives in the database
+    rather than in the queue's memory, it is written the moment the customer says
+    so — mid-call, before the call ends — and it is never deleted: a withdrawn
+    opt-out is a new row, so the history of what the customer asked for and when
+    survives intact.
+
+    One row per (customer, channel). `channel` "all" covers every channel and is
+    what a plain "stop contacting me" records.
+    """
+
+    __tablename__ = "contact_preferences"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    customer_id: Mapped[str] = mapped_column(String(64), index=True)
+    channel: Mapped[str] = mapped_column(String(16), default="all", index=True)
+    opted_out: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The customer's own words, masked. A reviewer asking "did they really ask to
+    # opt out, or did the agent mishear?" needs to see what was said.
+    stated: Mapped[str] = mapped_column(Text, default="")
+    language: Mapped[str] = mapped_column(String(8), default="en")
+    source: Mapped[str] = mapped_column(String(32), default="call")
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+
+
+class CallTask(Base):
+    """One outbound contact attempt the treatment strategy has scheduled.
+
+    The queue is persistent for the same reason the opt-out register is: a
+    strategy that says "at most three attempts, at least twenty-four hours
+    apart" is a statement about history, and a queue that forgets its history on
+    restart cannot honour it. Attempts and outcomes are written here as they
+    happen, and the gates read them back.
+    """
+
+    __tablename__ = "call_tasks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    customer_id: Mapped[str] = mapped_column(String(64), index=True)
+    strategy: Mapped[str] = mapped_column(String(48), index=True)
+    # The language the call will open in, taken from the customer record. An
+    # outbound call has to choose a voice before anyone has spoken.
+    language: Mapped[str] = mapped_column(String(8), default="en")
+    account_id: Mapped[str] = mapped_column(String(64), default="")
+
+    due_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    state: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    outcome: Mapped[str] = mapped_column(String(32), default="")
+    conversation_id: Mapped[str] = mapped_column(String(64), default="", index=True)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class AuditEvent(Base):

@@ -14,6 +14,7 @@ on the merits is never excluded for lacking a tag.
 """
 from __future__ import annotations
 
+import json
 import math
 from typing import Any, Optional
 
@@ -81,6 +82,11 @@ class VectorStore:
              # Chroma metadata must be scalar, so the approved wordings travel as
              # one string and are split back out on read.
              "offers": " || ".join(c.offers),
+             # The non-English wordings travel as JSON for the same reason. A
+             # separator-joined form would have to survive Arabic and Urdu text
+             # containing the separator; JSON already answers that question.
+             "offers_i18n": json.dumps(c.offers_by_language, ensure_ascii=False)
+                            if c.offers_by_language else "",
              "source": c.source}
             for c in chunks
         ]
@@ -105,6 +111,13 @@ class VectorStore:
     def _to_chunk(meta: dict, document: str, score: float) -> PolicyChunk:
         raw = meta.get("journeys") or ""
         offers = meta.get("offers") or ""
+        i18n_raw = meta.get("offers_i18n") or ""
+        try:
+            i18n = json.loads(i18n_raw) if i18n_raw else {}
+        except (TypeError, ValueError):
+            # A malformed metadata blob must not take the call down: the clause
+            # is still correct, it just loses its translations for this turn.
+            i18n = {}
         return PolicyChunk(
             policy_reference=meta.get("ref", ""),
             title=meta.get("title", ""),
@@ -113,6 +126,7 @@ class VectorStore:
             score=round(score, 4),
             journeys=[j for j in raw.split(",") if j],
             offers=[o.strip() for o in offers.split("||") if o.strip()],
+            offers_by_language={k: list(v) for k, v in i18n.items() if v},
         )
 
     def query(self, text: str, driver: Optional[Driver] = None, top_k: int = 3,

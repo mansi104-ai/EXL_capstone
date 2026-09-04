@@ -18,7 +18,7 @@ argued with, and it fails closed. It catches:
 * a third party's account number or sort code;
 * the caller's *own* full account number, which is never spoken either — a
   handler confirms an account by its last four digits;
-* a date of birth, postcode, phone number or email read back from the file.
+* a date of birth, Emirates ID, phone number or email read back from the file.
 
 Severity is `block`. Unlike clarity, this is not a matter of the customer being
 inconvenienced by an awkward sentence: a disclosure cannot be taken back once it
@@ -61,7 +61,7 @@ class DisclosureGuardrail(Guardrail):
         for identifier in all_identifiers():
             if not identifier:
                 continue
-            # Emails and postcodes read naturally; numbers need the normalised form.
+            # Emails read naturally; numbers need the normalised form.
             if "@" in identifier or " " in identifier.strip():
                 if identifier.lower() in lowered:
                     found.append(identifier)
@@ -72,9 +72,11 @@ class DisclosureGuardrail(Guardrail):
             # Report the kind of thing leaked, never the value itself — this
             # detail is written to the evidence log.
             kinds = sorted({("email" if "@" in f else
-                             "postcode" if re.match(r"^[A-Z]{1,2}\d", f) else
+                             "IBAN" if re.match(r"^AE\d{2}", f, re.IGNORECASE) else
+                             "Emirates ID" if re.match(r"^784-", f) else
                              "date of birth" if re.match(r"^\d{4}-\d{2}-\d{2}$", f) else
-                             "account or sort code") for f in found})
+                             "phone number" if f.startswith("+971") else
+                             "account number") for f in found})
             return self._fail(
                 "Reply contains customer data that must not be read out "
                 f"({', '.join(kinds)}). Confirm an account by its last four digits instead.",

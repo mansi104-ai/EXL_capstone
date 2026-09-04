@@ -27,29 +27,30 @@ from .base import Guardrail, GuardrailContext
 # Ordered longest-and-most-specific first. Two orderings here were bugs before
 # they were rules:
 #
-# * **Card before Aadhaar.** Aadhaar is exactly twelve digits and a card is
-#   thirteen to sixteen, so on a sixteen-digit card the Aadhaar rule matched
-#   twelve of them, masked those, and left the remaining four digits of the card
-#   sitting in the clear — a leak created by the redactor itself. The longer,
-#   more specific pattern has to consume the run first.
-# * **Mobile before account.** An Indian mobile is ten digits starting 6-9,
-#   which the 9-18 digit account rule would otherwise swallow. Both get masked
-#   either way, but the evidence record should say which it was.
+# * **IBAN first.** A UAE IBAN is "AE" and twenty-one digits. Nineteen of those
+#   digits are a bare run that the account rule would happily claim, and an
+#   evidence record saying "account" when the customer read out a full IBAN is
+#   the wrong record.
+# * **Emirates ID before card.** An Emirates ID is fifteen digits and a card is
+#   thirteen to sixteen, so the card rule matches an Emirates ID outright. The
+#   more specific pattern — anchored on the 784 issuer prefix every Emirates ID
+#   carries — has to consume the run first, or the redaction is logged as a card
+#   number and the fact that an identity document was read aloud is lost.
+# * **Mobile before account.** A UAE mobile is nine digits after the country
+#   code and starts 05, which the 9-18 digit account rule would otherwise
+#   swallow. Both get masked either way, but the evidence record should say
+#   which it was.
 _PATTERNS = [
     ("email", re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")),
-    # IFSC: four-letter bank code, a zero, then six branch characters.
-    ("ifsc", re.compile(r"\b[A-Z]{4}0[A-Z0-9]{6}\b", re.IGNORECASE)),
-    # PAN: five letters, four digits, one letter.
-    ("pan", re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b", re.IGNORECASE)),
-    # UPI handle: name@bank. After email so real addresses win.
-    ("upi_id", re.compile(r"\b[\w.-]{3,}@(?:okhdfcbank|oksbi|okaxis|okicici|paytm|"
-                          r"ybl|ibl|axl|upi|pib)\b", re.IGNORECASE)),
+    # UAE IBAN: "AE", two check digits, then nineteen more, however it is spaced.
+    ("iban", re.compile(r"\bAE\d{2}(?:[\s-]?\d){19}\b", re.IGNORECASE)),
+    # Emirates ID: 784-YYYY-NNNNNNN-C. Every resident holds one and everybody
+    # knows their own, which is exactly why it turns up in transcripts.
+    ("emirates_id", re.compile(r"\b784[\s-]?\d{4}[\s-]?\d{7}[\s-]?\d\b")),
     ("card", re.compile(r"\b(?:\d[ -]?){13,16}\b")),
-    # Aadhaar: exactly twelve digits, written in groups of four, never starting
-    # 0 or 1. The lookarounds keep it from biting a chunk out of a longer run.
-    ("aadhaar", re.compile(r"(?<!\d)(?<!\d[\s-])[2-9]\d{3}[\s-]?\d{4}[\s-]?\d{4}(?![\s-]?\d)")),
-    ("mobile", re.compile(r"(?:\+?91[\s-]?)?\b[6-9]\d{4}[\s-]?\d{5}\b")),
-    # Bank account numbers in India run 9-18 digits.
+    # UAE mobile: optional +971 or a leading 0, then 5X and seven digits.
+    ("mobile", re.compile(r"(?:\+?971[\s-]?|\b0)5[024568]\d?[\s-]?\d{3}[\s-]?\d{4}\b")),
+    # Bank account numbers here run 9-18 digits.
     ("account", re.compile(r"\b\d{9,18}\b")),
     ("date_of_birth", re.compile(
         r"\b(?:0?[1-9]|[12]\d|3[01])[/\-.](?:0?[1-9]|1[0-2])[/\-.](?:19|20)\d{2}\b")),
@@ -57,14 +58,12 @@ _PATTERNS = [
         r"\b(?:0?[1-9]|[12]\d|3[01])(?:st|nd|rd|th)?\s+(?:of\s+)?"
         r"(?:january|february|march|april|may|june|july|august|september|october|"
         r"november|december)\s+(?:19|20)\d{2}\b", re.IGNORECASE)),
-    # Indian PIN code. Six digits not starting zero, and only when it is being
-    # given as an address — a bare six-digit number is far too common to mask.
-    ("pin_code", re.compile(
-        r"\b(?:pin\s*code|pincode|pin)\b\D{0,10}([1-9]\d{5})\b", re.IGNORECASE)),
+    # There is no postal code in the UAE, and no rule here pretends there is.
+    # Address is not an identifier this system ever asks for or masks.
 ]
 
 # The categories where even the guardrail's own reporting must not echo a value.
-SENSITIVE = {"aadhaar", "pan"}
+SENSITIVE = {"emirates_id", "iban"}
 
 
 def mask_pii(text: str) -> tuple[str, dict[str, int]]:

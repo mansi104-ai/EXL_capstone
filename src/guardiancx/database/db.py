@@ -72,6 +72,26 @@ def _add_missing_columns(engine) -> list[str]:
     return added
 
 
+def reset_engine() -> None:
+    """Drop the cached engine so the next call re-reads the configured URL.
+
+    `init_engine` memoises, which is right for an application that opens one
+    database and keeps it. It is wrong for a test that wants its own: without
+    this, the first test to touch the database fixes the file every later test
+    writes to, and an append-only table like the opt-out register then carries
+    state from one test run into the next — which is exactly the kind of
+    contamination that makes a compliance register look like it is working when
+    it is only remembering.
+
+    Application code should never call this.
+    """
+    global _ENGINE, _SESSION_FACTORY
+    if _ENGINE is not None:
+        _ENGINE.dispose()
+    _ENGINE = None
+    _SESSION_FACTORY = None
+
+
 @contextmanager
 def session_scope() -> Iterator[Session]:
     if _SESSION_FACTORY is None:

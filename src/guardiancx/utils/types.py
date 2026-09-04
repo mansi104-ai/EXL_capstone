@@ -100,6 +100,28 @@ class PolicyChunk(BaseModel):
     # Approved customer-facing wording for this clause. Authored in the policy
     # document, not derived — what a vulnerable customer hears is signed off.
     offers: list[str] = Field(default_factory=list)
+    # The same wording, authored per language: {"ar": [...], "ur": [...]}.
+    # English stays in `offers`; this holds everything else.
+    offers_by_language: dict[str, list[str]] = Field(default_factory=dict)
+
+    def offers_in(self, language: str) -> tuple[list[str], bool]:
+        """Approved wording for `language`, and whether English was substituted.
+
+        Mirrors `rag.chunking.Chunk.offers_in`. The retrieved chunk is what the
+        reply composer actually sees, so the fallback flag has to survive the
+        round trip through the vector store — otherwise the one fact a reviewer
+        needs (this customer heard English because nobody has written the Urdu
+        yet) is lost exactly where it would have been recorded.
+        """
+        from .language import normalise
+
+        code = normalise(language)
+        if code == "en":
+            return list(self.offers), False
+        authored = self.offers_by_language.get(code)
+        if authored:
+            return list(authored), False
+        return list(self.offers), bool(self.offers)
 
 
 class Recommendation(BaseModel):

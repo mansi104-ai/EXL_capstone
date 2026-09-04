@@ -53,6 +53,7 @@ from typing import Optional
 
 from ..finance.taxonomy import FinancialContext, Journey
 from ..services.claude_client import EFFORT_REPLY, get_llm
+from ..utils.language import normalise as normalise_language
 from ..utils.types import Driver, SentimentReading
 
 # --------------------------------------------------------------------------- #
@@ -421,43 +422,153 @@ def _join_offers(offers: list[str]) -> str:
     return f"{first}, and {second}."
 
 
-def approved_offers(retrieved) -> list[str]:
-    """The signed-off wording from the retrieved clauses, best-scoring first."""
+def approved_offers(retrieved, language: str = "en") -> tuple[list[str], bool]:
+    """The signed-off wording from the retrieved clauses, best-scoring first.
+
+    Returns the offers and whether English had to stand in for a language the
+    clause has not been authored in. The caller needs both: an offer list alone
+    cannot tell you whether the customer is hearing approved Urdu or approved
+    English, and that is the difference between a compliant call and a call a
+    reviewer has to write up.
+    """
     out: list[str] = []
+    substituted = False
     for chunk in retrieved or []:
-        for offer in getattr(chunk, "offers", []) or []:
+        getter = getattr(chunk, "offers_in", None)
+        if callable(getter):
+            offers, fell_back = getter(language)
+        else:                     # a bare stub in a test, or an older record
+            offers, fell_back = list(getattr(chunk, "offers", []) or []), False
+        if fell_back:
+            substituted = True
+        for offer in offers:
             if offer not in out:
                 out.append(offer)
-    return out
+    return out, substituted
 
 
-def offers_for(decision, retrieved=None, limit: int = 2) -> tuple[list[str], list[str]]:
+def offers_for(decision, retrieved=None, limit: int = 2,
+               language: str = "en") -> tuple[list[str], list[str], bool]:
     """The offers to put in front of the customer.
 
     Approved wording first; derivation only fills the gap when a clause has none.
+    The third return value says whether approved wording in the requested
+    language was unavailable — derivation counts as unavailable too, because a
+    sentence this module built out of policy prose is English by construction.
     """
-    approved = approved_offers(retrieved)
+    approved, substituted = approved_offers(retrieved, language)
     if approved:
         _, reassurances = extract_offers(
             decision.recommendation.adaptations if decision and decision.recommendation else [])
-        return approved[:limit], reassurances
+        return approved[:limit], reassurances, substituted
     if decision is None or decision.recommendation is None:
-        return [], []
-    return extract_offers(decision.recommendation.adaptations, limit=limit)
+        return [], [], normalise_language(language) != "en"
+    offers, reassurances = extract_offers(decision.recommendation.adaptations, limit=limit)
+    return offers, reassurances, normalise_language(language) != "en"
+
+
+# --------------------------------------------------------------------------- #
+# Approved scaffolding — the sentences around the offers
+#
+# The approved `Offer:` wording is only ever the middle of a reply. Something has
+# to acknowledge the customer first and hand the turn back at the end, and on a
+# non-English call those sentences need signing off exactly as the offers do.
+# Composing an Arabic offer inside an English frame produces a reply that is
+# neither language and that no reviewer approved, so the frame is authored here
+# alongside the wording it wraps.
+#
+# This table is short on purpose. It is the *procedural* furniture of a call —
+# acknowledge, hand back, say you will explain the options — and nothing in it
+# makes a commitment to the customer. Everything that commits the bank to
+# anything lives in the policy corpus, where a reviewer reads it next to the
+# clause it comes from.
+# --------------------------------------------------------------------------- #
+LANGUAGE_SCAFFOLD: dict[str, dict[str, str]] = {
+    "ar": {
+        "opener": "أنا أستمع إليك، وسأساعدك في هذا.",
+        "opener_distress": "يؤسفني سماع ذلك. خذ وقتك، أنا معك.",
+        "handback": "هل يناسبك ذلك؟",
+        "no_offer": "دعني أوضح لك الدعم الذي يمكننا تقديمه.",
+        "account": "يمكنني مراجعة تفاصيل حسابك معك الآن.",
+        "sentence_end": ".",
+    },
+    "ur": {
+        "opener": "میں آپ کی بات سن رہی ہوں، اور اس میں آپ کی مدد کروں گی۔",
+        "opener_distress": "یہ سن کر افسوس ہوا۔ آپ اطمینان سے بتائیں، میں آپ کے ساتھ ہوں۔",
+        "handback": "کیا یہ آپ کے لیے مناسب رہے گا؟",
+        "no_offer": "میں آپ کو بتاتی ہوں کہ ہم کیا مدد فراہم کر سکتے ہیں۔",
+        "account": "میں ابھی آپ کے ساتھ آپ کے اکاؤنٹ کی تفصیلات دیکھ سکتی ہوں۔",
+        "sentence_end": "۔",
+    },
+}
+
+
+def can_compose_in(language: str, retrieved=None) -> bool:
+    """Is there approved wording *and* approved scaffolding for this language?
+
+    Both, or neither. Arabic offers in an English frame is not a partial success,
+    it is a reply in no language at all — and the customer who most needs to
+    understand it is the one least able to bridge the gap.
+    """
+    code = normalise_language(language)
+    if code == "en":
+        return True
+    if code not in LANGUAGE_SCAFFOLD:
+        return False
+    _, substituted = approved_offers(retrieved, code)
+    return not substituted
+
+
+def _compose_localised(decision, language: str, context, sentiment, retrieved,
+                       account) -> str:
+    """The reply for a call being held in a language other than English.
+
+    Deliberately narrower than the English composer. It states no figures: an
+    account balance dropped into an approved Arabic sentence makes a sentence
+    nobody approved, and the honest move is to offer to go through the account
+    rather than to improvise a number into a language the reviewer cannot read.
+    """
+    scaffold = LANGUAGE_SCAFFOLD[normalise_language(language)]
+    end = scaffold["sentence_end"]
+
+    distressed = sentiment is not None and sentiment.distress >= 0.5
+    parts = [scaffold["opener_distress"] if distressed else scaffold["opener"]]
+
+    if account is not None and getattr(account, "decision", "none") in ("disclose", "partial"):
+        parts.append(scaffold["account"])
+
+    offers, _, _ = offers_for(decision, retrieved, limit=2, language=language)
+    if offers:
+        for offer in offers[:2]:
+            parts.append(offer.rstrip(" .。۔") + end)
+        parts.append(scaffold["handback"])
+    else:
+        parts.append(scaffold["no_offer"])
+
+    return re.sub(r"[ \t]+", " ", " ".join(p for p in parts if p)).strip()
 
 
 def compose_reply(decision, context: Optional[FinancialContext] = None,
                   sentiment: Optional[SentimentReading] = None,
-                  retrieved=None, account=None) -> str:
+                  retrieved=None, account=None, language: str = "en") -> str:
     """Build the handler's reply without a model.
 
     This is the path every demo runs on until an API key is configured, so it
     has to be genuinely good rather than a placeholder. Structure is fixed and
     deliberate: acknowledge, then one or two concrete offers, then a question
     that hands the conversation back.
+
+    `language` is the language the call is being held in. When approved wording
+    and scaffolding both exist for it, the whole reply is composed from approved
+    parts; when they do not, the reply is composed in English and the caller can
+    see why from `can_compose_in`. Nothing here translates anything.
     """
     if decision is None:
         return "Thanks for calling. How can I help you today?"
+
+    if normalise_language(language) != "en" and can_compose_in(language, retrieved):
+        return _compose_localised(decision, language, context, sentiment,
+                                  retrieved, account)
 
     opener = _opener(context, decision, sentiment)
 
@@ -516,7 +627,7 @@ def compose_reply(decision, context: Optional[FinancialContext] = None,
 
     # A reply carrying figures has already used most of the customer's attention,
     # so it gets one offer rather than two.
-    offers, reassurances = offers_for(decision, retrieved, limit=1 if facts else 2)
+    offers, reassurances, _ = offers_for(decision, retrieved, limit=1 if facts else 2)
 
     parts = [opener]
 
@@ -562,7 +673,7 @@ def build_reply_prompt(customer_text: str, decision,
     """
     recommendation = decision.recommendation if decision else None
     if recommendation:
-        offers, reassurances = offers_for(decision, retrieved, limit=3)
+        offers, reassurances, _ = offers_for(decision, retrieved, limit=3)
         guidance = plain_english(recommendation.summary)
         available = "\n".join(f"- {offer}" for offer in offers) or "- (nothing specific)"
         promises = "\n".join(f"- {r}" for r in reassurances)
@@ -664,7 +775,8 @@ _STAGE_FALLBACK: dict[str, str] = {
 # Objectives that embed a value, matched on a cue rather than the whole string.
 _OBJECTIVE_TEMPLATES: list[tuple[str, str]] = [
     ("their date of birth", "Thank you. {name}could you confirm your date of birth?"),
-    ("the postcode", "Thank you. {name}could you confirm the PIN code on the account?"),
+    ("Emirates ID", "Thank you. {name}could you confirm the last four digits of "
+                    "your Emirates ID?"),
     ("spell it", "Sorry, {name}I can't find that name — could you spell it for me?"),
     ("a security detail", "Thank you. {name}could you confirm a detail on the account?"),
     ("did not match", "That doesn't quite match what I have, I'm afraid. "

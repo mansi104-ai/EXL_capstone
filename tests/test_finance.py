@@ -59,13 +59,15 @@ def test_arrears_are_counted_in_both_phrasings():
 
 
 def test_monetary_amounts_are_extracted():
-    context = classify_heuristic("I owe ₹1,24,050 and can only pay ₹5,000 this month.")
-    assert "₹1,24,050" in context.monetary_amounts
+    context = classify_heuristic("I owe AED 124,050 and can only pay AED 5,000 this month.")
+    assert "AED 124,050" in context.monetary_amounts
 
 
-def test_indian_number_words_are_extracted():
-    context = classify_heuristic("The loan is about 28 lakh and I've paid 2 lakh already.")
-    assert any("lakh" in a for a in context.monetary_amounts)
+def test_spoken_dirham_amounts_are_extracted():
+    """Callers say the currency after the figure as often as before it."""
+    context = classify_heuristic("The loan is about 280,000 dirhams and I've paid 20,000 AED.")
+    assert any("dirham" in a for a in context.monetary_amounts)
+    assert any("AED" in a for a in context.monetary_amounts)
 
 
 # --------------------------------------------------------------------------- #
